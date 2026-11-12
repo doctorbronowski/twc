@@ -14,7 +14,7 @@ project.
 pnpm install
 cp .env.example .env.local
 # Set DB_PASSWORD in .env.local to a random local-only password.
-DB_ADMIN_USER=root DB_ADMIN_PASSWORD='your-local-mysql-admin-password' pnpm db:setup
+DB_ADMIN_USER=xxxx DB_ADMIN_PASSWORD='your-local-mysql-admin-password' pnpm db:setup
 pnpm dev
 ```
 
