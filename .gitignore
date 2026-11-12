@@ -4,6 +4,7 @@ dist-ssr
 *.local
 .env
 .env.*
-!.env.example
 *.log
 .DS_Store
+/docs/
+/server/migrations/
