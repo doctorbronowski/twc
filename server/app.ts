@@ -11,6 +11,21 @@ export function createApp(repository: ActivityRepository) {
     response.json({ status: 'ok' })
   })
 
+  app.get('/api/activities', async (_request, response) => {
+    try {
+      const activities = await repository.listActivities()
+      response.json({ activities })
+    } catch (error) {
+      console.error(
+        'Unable to load activities:',
+        error instanceof Error ? error.message : 'Unknown database error',
+      )
+      response.status(500).json({
+        error: 'Activities could not be loaded. Please try again.',
+      })
+    }
+  })
+
   app.post('/api/activities', async (request, response) => {
     const parsedActivity = parseActivity(request.body)
 

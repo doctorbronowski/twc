@@ -1,7 +1,8 @@
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import ActivityForm, {
   type ActivityFormValues,
 } from './components/ActivityForm.tsx'
+import ActivitySearchPage from './components/ActivitySearchPage.tsx'
 import './index.css'
 
 type Page = 'home' | 'enter' | 'search'
@@ -131,6 +132,12 @@ function EnterPage() {
   const [notice, setNotice] = useState<Notice | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
+  useEffect(() => {
+    if (notice) {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }, [notice])
+
   async function handleSubmit(activity: ActivityFormValues) {
     setNotice(null)
     setIsSubmitting(true)
@@ -191,12 +198,7 @@ function EnterPage() {
 function SearchPage() {
   return (
     <AppFrame activePage="search">
-      <section className="placeholder-panel" aria-labelledby="search-title">
-        <p className="eyebrow">Work search activity</p>
-        <h1 id="search-title">Search</h1>
-        <p className="construction-label">Under construction</p>
-        <p>Activity search will be available in a future phase.</p>
-      </section>
+      <ActivitySearchPage />
     </AppFrame>
   )
 }

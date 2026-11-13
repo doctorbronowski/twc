@@ -3,14 +3,19 @@ import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import { after, before, describe, it } from 'node:test'
 import type { ActivityInput } from './activityInput.ts'
-import type { ActivityRepository } from './activityRepository.ts'
+import type {
+  ActivityRecord,
+  ActivityRepository,
+} from './activityRepository.ts'
 import { createApp } from './app.ts'
 
 describe('Activity API', () => {
   let baseUrl: string
   let server: ReturnType<ReturnType<typeof createApp>['listen']>
   let savedActivity: ActivityInput | undefined
+  let activities: ActivityRecord[] = []
   let repositoryFailure = false
+  let listFailure = false
 
   const repository: ActivityRepository = {
     async createActivity(activity) {
@@ -21,6 +26,14 @@ describe('Activity API', () => {
       }
       savedActivity = activity
       return 42
+    },
+    async listActivities() {
+      if (listFailure) {
+        throw new Error(
+          'Database connection details must not reach the response.',
+        )
+      }
+      return activities
     },
   }
 
@@ -43,12 +56,63 @@ describe('Activity API', () => {
     assert.deepEqual(await response.json(), { status: 'ok' })
   })
 
+  it('lists activities with the complete activity data', async () => {
+    activities = [
+      {
+        id: 42,
+        activity_date: '2026-11-12',
+        job_source: 'Online application',
+        job_title: 'Developer',
+        employer_name: 'Example Employer',
+        employer_address1: '100 Main Street',
+        employer_address2: null,
+        employer_city: 'Austin',
+        employer_state: 'TX',
+        employer_zip: '00123',
+        employer_phone: '5125550123',
+        employer_contact: 'Jane Doe',
+        employer_email: 'jane@example.com',
+        hiring_result: 'not_hired',
+        start_date: null,
+        application_filed: true,
+        result_other: null,
+        notes: 'Follow up next week',
+      },
+    ]
+
+    const response = await fetch(`${baseUrl}/api/activities`)
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { activities })
+    activities = []
+  })
+
+  it('returns an empty list when there are no activities', async () => {
+    const response = await fetch(`${baseUrl}/api/activities`)
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { activities: [] })
+  })
+
+  it('returns a generic server error if listing activities fails', async () => {
+    listFailure = true
+    const response = await fetch(`${baseUrl}/api/activities`)
+    listFailure = false
+
+    assert.equal(response.status, 500)
+    assert.deepEqual(await response.json(), {
+      error: 'Activities could not be loaded. Please try again.',
+    })
+  })
+
   it('creates an activity and normalizes phone and empty dates', async () => {
     const response = await fetch(`${baseUrl}/api/activities`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         activity_date: '2026-11-12',
+        job_source: 'Online application',
+        job_title: 'Developer',
         employer_zip: '00123',
         employer_phone: '(512) 555-0123',
         start_date: '',
@@ -59,6 +123,8 @@ describe('Activity API', () => {
 
     assert.equal(response.status, 201)
     assert.deepEqual(await response.json(), { id: 42 })
+    assert.equal(savedActivity?.job_source, 'Online application')
+    assert.equal(savedActivity?.job_title, 'Developer')
     assert.equal(savedActivity?.employer_zip, '00123')
     assert.equal(savedActivity?.employer_phone, '5125550123')
     assert.equal(savedActivity?.activity_date, '2026-11-12')

@@ -18,23 +18,30 @@ DB_ADMIN_USER=xxxx DB_ADMIN_PASSWORD='your-local-mysql-admin-password' pnpm db:s
 pnpm dev
 ```
 
-The frontend is available at <http://127.0.0.1:5174> and the API listens on
-`127.0.0.1:3002`. The Vite development server proxies `/api` requests to the
-Express API. `GET /api/health` checks API availability; `POST /api/activities`
-creates an activity. Database setup creates the `twc` schema and an
-insert-only `twc_app` account. The admin credentials are used only for the
-one-time setup command and should not be saved in `.env.local` or committed.
+The frontend is available directly at <http://127.0.0.1:5174> and through
+Apache at <http://twc.local.com>. The API listens on `127.0.0.1:3002`; Vite
+proxies `/api` requests to Express. `GET /api/health` checks API availability;
+`GET /api/activities` lists the 50 most recent activities and
+`POST /api/activities` creates an activity. Database setup creates the `twc`
+schema and a `twc_app` account with only `SELECT` and `INSERT` access to the
+activity table. The admin credentials are used only for the one-time setup
+command and should not be saved in `.env.local` or committed.
+
+Apache must be running to use the `twc.local.com` address. In this environment
+it is started manually; if it is stopped, run
+`sudo /opt/local/sbin/apachectl start`.
 
 ## Pages
 
 - `/` — welcome dashboard with links to Enter and Search.
 - `/enter` — responsive work-search activity form with calendar date inputs,
   state selection, phone mask, Clear, and Submit actions.
-- `/search` — Phase 2 placeholder.
+- `/search` — responsive list of up to 50 activities with a read-only details
+  modal for each record.
 
 The form submits to the local API and retains its values after both successful
-and unsuccessful saves. `twc.local.com` Apache/hosts configuration remains
-deferred to a later phase.
+and unsuccessful saves. TWC uses Vite port `5174` and Express port `3002`;
+Hypori uses separate ports `5173` and `3001` so both projects can run at once.
 
 ## Checks
 

@@ -469,6 +469,169 @@ a {
   background: #fff2f1;
 }
 
+.search-state {
+  margin: 0;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid #e1e6ee;
+  border-radius: 0.75rem;
+  color: #4b5870;
+  background: #fff;
+}
+
+.search-error {
+  border-color: #e6b4b1;
+  color: #842d2a;
+  background: #fff2f1;
+}
+
+.search-error p {
+  margin: 0;
+}
+
+.search-results-count {
+  margin: 0 0 0.75rem;
+  color: #647087;
+  font-size: 0.9rem;
+}
+
+.search-table-container {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e1e6ee;
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.search-table {
+  width: 100%;
+  min-width: 40rem;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.search-table th,
+.search-table td {
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid #e7ebf1;
+  vertical-align: middle;
+}
+
+.search-table th {
+  color: #34425a;
+  background: #f7f9fc;
+  font-size: 0.86rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.search-table th:first-child {
+  width: 6rem;
+}
+
+.search-table td {
+  color: #4b5870;
+  overflow-wrap: anywhere;
+}
+
+.search-table tbody tr:hover {
+  background: #f8faff;
+}
+
+.view-activity-button {
+  padding: 0.35rem 0.2rem;
+  border: 0;
+  color: #244b94;
+  background: transparent;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.activity-dialog {
+  width: min(42rem, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  max-height: min(90vh, 52rem);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #d5dce7;
+  border-radius: 0.9rem;
+  color: #172033;
+  background: #fff;
+  box-shadow: 0 1.5rem 4rem rgb(15 27 48 / 25%);
+}
+
+.activity-dialog::backdrop {
+  background: rgb(16 28 48 / 52%);
+  backdrop-filter: blur(2px);
+}
+
+.activity-dialog-content {
+  max-height: min(90vh, 52rem);
+  display: flex;
+  flex-direction: column;
+}
+
+@supports (height: 100dvh) {
+  .activity-dialog,
+  .activity-dialog-content {
+    max-height: min(90dvh, 52rem);
+  }
+}
+
+.activity-dialog-header {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #e1e6ee;
+}
+
+.activity-dialog-header h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 1.25rem;
+}
+
+.activity-dialog-body {
+  min-height: 0;
+  padding: 1rem 1.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.activity-details-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.activity-details-table th,
+.activity-details-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid #e7ebf1;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.activity-details-table th {
+  width: 38%;
+  color: #34425a;
+  background: #f7f9fc;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.activity-details-table td {
+  color: #4b5870;
+  white-space: pre-wrap;
+}
+
+.activity-dialog-footer {
+  padding: 1rem 1.5rem;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid #e1e6ee;
+}
+
 .placeholder-panel {
   padding: clamp(1.75rem, 5vw, 3rem);
   border: 1px solid #e1e6ee;
@@ -557,6 +720,37 @@ textarea:focus-visible {
   .notice-banner {
     width: min(100% - 2rem, 72rem);
     align-items: flex-start;
+  }
+
+  .search-table {
+    min-width: 40rem;
+  }
+
+  .activity-dialog {
+    width: calc(100vw - 1rem);
+    max-width: calc(100vw - 1rem);
+  }
+
+  .activity-dialog-header {
+    padding: 1rem;
+  }
+
+  .activity-dialog-body {
+    padding: 0.75rem;
+  }
+
+  .activity-details-table th,
+  .activity-details-table td {
+    padding: 0.65rem 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .activity-details-table th {
+    width: 40%;
+  }
+
+  .activity-dialog-footer {
+    padding: 0.75rem 1rem;
   }
 
   .site-footer {

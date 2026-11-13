@@ -2,8 +2,8 @@ import { type FormEvent, useState } from 'react'
 
 export interface ActivityFormValues {
   activity_date: string
-  work_search_type: string
-  job_type: string
+  job_source: string
+  job_title: string
   employer_name: string
   employer_address1: string
   employer_address2: string
@@ -30,8 +30,8 @@ type TextFieldName = Exclude<keyof ActivityFormValues, 'application_filed'>
 
 const initialActivity: ActivityFormValues = {
   activity_date: '',
-  work_search_type: '',
-  job_type: '',
+  job_source: '',
+  job_title: '',
   employer_name: '',
   employer_address1: '',
   employer_address2: '',
@@ -155,25 +155,25 @@ function ActivityForm({ isSubmitting, onClear, onSubmit }: ActivityFormProps) {
             />
           </div>
           <div className="form-field">
-            <label htmlFor="work-search-type">Work Search Type</label>
+            <label htmlFor="job-source">Job Source</label>
             <input
-              id="work-search-type"
-              name="work_search_type"
+              id="job-source"
+              name="job_source"
               type="text"
-              value={activity.work_search_type}
+              value={activity.job_source}
               onChange={(event) =>
-                updateField('work_search_type', event.target.value)
+                updateField('job_source', event.target.value)
               }
             />
           </div>
           <div className="form-field">
-            <label htmlFor="job-type">Type of Job</label>
+            <label htmlFor="job-title">Job Title</label>
             <input
-              id="job-type"
-              name="job_type"
+              id="job-title"
+              name="job_title"
               type="text"
-              value={activity.job_type}
-              onChange={(event) => updateField('job_type', event.target.value)}
+              value={activity.job_title}
+              onChange={(event) => updateField('job_title', event.target.value)}
             />
           </div>
         </div>

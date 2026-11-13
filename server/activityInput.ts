@@ -1,7 +1,7 @@
 export interface ActivityInput {
   activity_date: string | null
-  work_search_type: string | null
-  job_type: string | null
+  job_source: string | null
+  job_title: string | null
   employer_name: string | null
   employer_address1: string | null
   employer_address2: string | null
@@ -76,8 +76,8 @@ export function parseActivity(value: unknown): ParsedActivity {
   }
 
   const activityDate = optionalDate(value.activity_date)
-  const workSearchType = optionalText(value.work_search_type, 255)
-  const jobType = optionalText(value.job_type, 255)
+  const jobSource = optionalText(value.job_source, 255)
+  const jobTitle = optionalText(value.job_title, 255)
   const employerName = optionalText(value.employer_name, 255)
   const employerAddress1 = optionalText(value.employer_address1, 255)
   const employerAddress2 = optionalText(value.employer_address2, 255)
@@ -101,8 +101,8 @@ export function parseActivity(value: unknown): ParsedActivity {
 
   if (
     activityDate === invalid ||
-    workSearchType === invalid ||
-    jobType === invalid ||
+    jobSource === invalid ||
+    jobTitle === invalid ||
     employerName === invalid ||
     employerAddress1 === invalid ||
     employerAddress2 === invalid ||
@@ -127,8 +127,8 @@ export function parseActivity(value: unknown): ParsedActivity {
     ok: true,
     value: {
       activity_date: activityDate,
-      work_search_type: workSearchType,
-      job_type: jobType,
+      job_source: jobSource,
+      job_title: jobTitle,
       employer_name: employerName,
       employer_address1: employerAddress1,
       employer_address2: employerAddress2,
