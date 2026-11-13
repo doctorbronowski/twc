@@ -1,11 +1,13 @@
 import { type ReactNode, useEffect, useState } from 'react'
+import ActivityExportPage from './components/ActivityExportPage.tsx'
 import ActivityForm, {
   type ActivityFormValues,
 } from './components/ActivityForm.tsx'
+import ActivityPrintPreviewPage from './components/ActivityPrintPreviewPage.tsx'
 import ActivitySearchPage from './components/ActivitySearchPage.tsx'
 import './index.css'
 
-type Page = 'home' | 'enter' | 'search'
+type Page = 'home' | 'enter' | 'search' | 'export'
 
 interface Notice {
   type: 'success' | 'error'
@@ -23,6 +25,7 @@ const navigation: { label: string; href: string; page: Page }[] = [
   { label: 'Home', href: '/', page: 'home' },
   { label: 'Enter Activity', href: '/enter', page: 'enter' },
   { label: 'View/Edit Activities', href: '/search', page: 'search' },
+  { label: 'Export/Print Activities', href: '/export', page: 'export' },
 ]
 
 function AppFrame({
@@ -84,7 +87,7 @@ function DashboardPage() {
         <h1 id="welcome-title">Welcome</h1>
         <p>
           Keep your work-search activity organized in one place. Record a new
-          activity or visit Search to see what’s coming next.
+          activity or visit Search to review and update your records.
         </p>
       </section>
 
@@ -115,7 +118,7 @@ function DashboardPage() {
             <span className="quick-link-copy">
               <span className="quick-link-title">Search activities</span>
               <span className="quick-link-description">
-                Activity search will be available in a future phase.
+                Review and update your recorded work-search activities.
               </span>
             </span>
             <span className="quick-link-arrow" aria-hidden="true">
@@ -184,7 +187,9 @@ function EnterPage() {
       <section className="page-intro" aria-labelledby="enter-title">
         <p className="eyebrow">Work search activity</p>
         <h1 id="enter-title">Enter an activity</h1>
-        <p>Record the details of an employer contact or job application.</p>
+        <p>
+          Record the details of an employer/agency contact or job application.
+        </p>
       </section>
       <ActivityForm
         isSubmitting={isSubmitting}
@@ -222,8 +227,32 @@ function SearchPage() {
   )
 }
 
+function ExportPage() {
+  return (
+    <AppFrame activePage="export">
+      <ActivityExportPage />
+    </AppFrame>
+  )
+}
+
+function PrintPreviewPage() {
+  return (
+    <AppFrame activePage="export">
+      <ActivityPrintPreviewPage />
+    </AppFrame>
+  )
+}
+
 function App() {
   const path = window.location.pathname.replace(/\/+$/, '') || '/'
+
+  if (path === '/export/print') {
+    return <PrintPreviewPage />
+  }
+
+  if (path === '/export') {
+    return <ExportPage />
+  }
 
   if (path === '/enter') {
     return <EnterPage />

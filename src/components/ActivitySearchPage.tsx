@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import {
+  type ActivityPageSize,
+  activityPageSizes,
+  isActivityListResponse,
+} from '../activityApi.ts'
 import ActivityDetailsDialog, {
   type SearchActivity,
 } from './ActivityDetailsDialog.tsx'
@@ -7,59 +12,6 @@ import EditActivityDialog from './EditActivityDialog.tsx'
 
 interface ActivitySearchPageProps {
   onEditSuccess: () => void
-}
-
-const nullableStringFields = [
-  'activity_date',
-  'job_source',
-  'job_source_url',
-  'job_title',
-  'employer_name',
-  'employer_address1',
-  'employer_address2',
-  'employer_city',
-  'employer_state',
-  'employer_zip',
-  'employer_phone',
-  'employer_contact',
-  'employer_email',
-  'start_date',
-  'result_other',
-  'notes',
-] as const
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function isSearchActivity(value: unknown): value is SearchActivity {
-  if (!isRecord(value)) {
-    return false
-  }
-
-  const hiringResult = value.hiring_result
-
-  return (
-    typeof value.id === 'number' &&
-    Number.isInteger(value.id) &&
-    nullableStringFields.every(
-      (field) => value[field] === null || typeof value[field] === 'string',
-    ) &&
-    (hiringResult === null ||
-      hiringResult === 'hired' ||
-      hiringResult === 'not_hired') &&
-    typeof value.application_filed === 'boolean'
-  )
-}
-
-function isActivityListResponse(
-  value: unknown,
-): value is { activities: SearchActivity[] } {
-  return (
-    isRecord(value) &&
-    Array.isArray(value.activities) &&
-    value.activities.every(isSearchActivity)
-  )
 }
 
 function displayValue(value: string | null): string {
@@ -75,6 +27,10 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
   )
   const [isLoading, setIsLoading] = useState(true)
   const [hasLoadError, setHasLoadError] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState<ActivityPageSize>(5)
+  const [totalRecords, setTotalRecords] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const viewButtonRef = useRef<HTMLButtonElement | null>(null)
   const editButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -90,20 +46,24 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
       }
 
       try {
-        const response = await fetch('/api/activities', {
-          signal: controller.signal,
-        })
+        const response = await fetch(
+          `/api/activities?page=${currentPage}&pageSize=${pageSize}`,
+          { signal: controller.signal },
+        )
 
         if (!response.ok) {
           throw new Error(`Activity search returned HTTP ${response.status}.`)
         }
 
         const body: unknown = await response.json()
-        if (!isActivityListResponse(body)) {
+        if (!isActivityListResponse(body, pageSize)) {
           throw new Error('Activity search returned an invalid response.')
         }
 
         setActivities(body.activities)
+        setCurrentPage(body.page)
+        setTotalRecords(body.totalRecords)
+        setTotalPages(body.totalPages)
       } catch {
         if (!controller.signal.aborted) {
           setHasLoadError(true)
@@ -117,7 +77,22 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
 
     void loadActivities()
     return () => controller.abort()
-  }, [refreshVersion])
+  }, [currentPage, pageSize, refreshVersion])
+
+  const firstResult = (currentPage - 1) * pageSize + 1
+  const lastResult = Math.min(currentPage * pageSize, totalRecords)
+
+  function handlePageSizeChange(value: string) {
+    const selectedPageSize = activityPageSizes.find(
+      (size) => size.toString() === value,
+    )
+    if (selectedPageSize === undefined) {
+      return
+    }
+
+    setPageSize(selectedPageSize)
+    setCurrentPage(1)
+  }
 
   async function handleEditSave(
     id: number,
@@ -145,8 +120,8 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
           Search
         </h1>
         <p>
-          View your 50 most recent activities, sorted by activity date,
-          employer, and job title.
+          Browse all activities, sorted by activity date, employer/agency, and
+          job title.
         </p>
       </section>
 
@@ -164,10 +139,26 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
         </p>
       ) : (
         <>
-          <p className="search-results-count" role="status">
-            Showing {activities.length}{' '}
-            {activities.length === 1 ? 'activity' : 'activities'}
-          </p>
+          <div className="search-results-toolbar">
+            <p className="search-results-count" role="status">
+              Showing {firstResult}–{lastResult} of {totalRecords} activities
+            </p>
+            <label className="page-size-control">
+              Rows per page
+              <select
+                value={pageSize}
+                onChange={(event) =>
+                  handlePageSizeChange(event.currentTarget.value)
+                }
+              >
+                {activityPageSizes.map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <section
             className="search-table-container"
             aria-label="Search results"
@@ -181,7 +172,7 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
                   <th scope="col" aria-label="Activity actions"></th>
                   <th scope="col" aria-label="Edit activity action"></th>
                   <th scope="col">Date of Activity</th>
-                  <th scope="col">Employer Name</th>
+                  <th scope="col">Employer/Agency Name</th>
                   <th scope="col">Job Title</th>
                 </tr>
               </thead>
@@ -222,6 +213,29 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
               </tbody>
             </table>
           </section>
+          {totalPages > 1 && (
+            <nav className="pagination-controls" aria-label="Activity pages">
+              <button
+                className="button button-secondary"
+                type="button"
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage((page) => page - 1)}
+              >
+                Previous
+              </button>
+              <span aria-live="polite">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                className="button button-secondary"
+                type="button"
+                disabled={currentPage >= totalPages}
+                onClick={() => setCurrentPage((page) => page + 1)}
+              >
+                Next
+              </button>
+            </nav>
+          )}
         </>
       )}
 

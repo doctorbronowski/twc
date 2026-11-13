@@ -219,10 +219,10 @@ function ActivityForm({
       </fieldset>
 
       <fieldset className="form-section">
-        <legend>Employer details</legend>
+        <legend>Employer/Agency details</legend>
         <div className="form-grid">
           <div className="form-field">
-            <label htmlFor="employer-name">Employer Name</label>
+            <label htmlFor="employer-name">Employer/Agency Name</label>
             <input
               id="employer-name"
               name="employer_name"
@@ -235,7 +235,7 @@ function ActivityForm({
             />
           </div>
           <div className="form-field">
-            <label htmlFor="employer-address1">Employer Address 1</label>
+            <label htmlFor="employer-address1">Employer/Agency Address 1</label>
             <input
               id="employer-address1"
               name="employer_address1"
@@ -248,7 +248,7 @@ function ActivityForm({
             />
           </div>
           <div className="form-field">
-            <label htmlFor="employer-address2">Employer Address 2</label>
+            <label htmlFor="employer-address2">Employer/Agency Address 2</label>
             <input
               id="employer-address2"
               name="employer_address2"
@@ -261,7 +261,7 @@ function ActivityForm({
             />
           </div>
           <div className="form-field">
-            <label htmlFor="employer-city">Employer City</label>
+            <label htmlFor="employer-city">Employer/Agency City</label>
             <input
               id="employer-city"
               name="employer_city"
@@ -274,7 +274,7 @@ function ActivityForm({
             />
           </div>
           <div className="form-field">
-            <label htmlFor="employer-state">Employer State</label>
+            <label htmlFor="employer-state">Employer/Agency State</label>
             <select
               id="employer-state"
               name="employer_state"
@@ -293,7 +293,7 @@ function ActivityForm({
             </select>
           </div>
           <div className="form-field">
-            <label htmlFor="employer-zip">Employer ZIP</label>
+            <label htmlFor="employer-zip">Employer/Agency ZIP</label>
             <input
               id="employer-zip"
               name="employer_zip"
@@ -307,7 +307,7 @@ function ActivityForm({
             />
           </div>
           <div className="form-field">
-            <label htmlFor="employer-phone">Employer Phone</label>
+            <label htmlFor="employer-phone">Employer/Agency Phone</label>
             <input
               id="employer-phone"
               name="employer_phone"
@@ -326,7 +326,7 @@ function ActivityForm({
             </span>
           </div>
           <div className="form-field">
-            <label htmlFor="employer-contact">Employer Contact</label>
+            <label htmlFor="employer-contact">Employer/Agency Contact</label>
             <input
               id="employer-contact"
               name="employer_contact"
@@ -339,7 +339,7 @@ function ActivityForm({
             />
           </div>
           <div className="form-field">
-            <label htmlFor="employer-email">Employer Email</label>
+            <label htmlFor="employer-email">Employer/Agency Email</label>
             <input
               id="employer-email"
               name="employer_email"

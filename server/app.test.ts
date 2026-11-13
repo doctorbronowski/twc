@@ -4,10 +4,35 @@ import type { AddressInfo } from 'node:net'
 import { after, before, describe, it } from 'node:test'
 import type { ActivityInput } from './activityInput.ts'
 import type {
+  ActivityPage,
   ActivityRecord,
   ActivityRepository,
 } from './activityRepository.ts'
 import { createApp } from './app.ts'
+
+function createActivityRecord(id: number): ActivityRecord {
+  return {
+    id,
+    activity_date: null,
+    job_source: null,
+    job_source_url: null,
+    job_title: null,
+    employer_name: null,
+    employer_address1: null,
+    employer_address2: null,
+    employer_city: null,
+    employer_state: null,
+    employer_zip: null,
+    employer_phone: null,
+    employer_contact: null,
+    employer_email: null,
+    hiring_result: null,
+    start_date: null,
+    application_filed: false,
+    result_other: null,
+    notes: null,
+  }
+}
 
 describe('Activity API', () => {
   let baseUrl: string
@@ -16,6 +41,7 @@ describe('Activity API', () => {
   let activities: ActivityRecord[] = []
   let repositoryFailure = false
   let listFailure = false
+  let exportFailure = false
   let updateFailure = false
 
   const repository: ActivityRepository = {
@@ -40,13 +66,31 @@ describe('Activity API', () => {
       savedActivity = activity
       return true
     },
-    async listActivities() {
+    async listActivities(page, pageSize): Promise<ActivityPage> {
       if (listFailure) {
         throw new Error(
           'Database connection details must not reach the response.',
         )
       }
-      return activities
+      const totalRecords = activities.length
+      const totalPages = Math.ceil(totalRecords / pageSize)
+      const currentPage = Math.min(page, Math.max(totalPages, 1))
+      const start = (currentPage - 1) * pageSize
+      return {
+        activities: activities.slice(start, start + pageSize),
+        page: currentPage,
+        pageSize,
+        totalRecords,
+        totalPages,
+      }
+    },
+    async getActivitiesByIds(ids) {
+      if (exportFailure) {
+        throw new Error(
+          'Database connection details must not reach the response.',
+        )
+      }
+      return activities.filter((activity) => ids.includes(activity.id))
     },
   }
 
@@ -97,7 +141,13 @@ describe('Activity API', () => {
     const response = await fetch(`${baseUrl}/api/activities`)
 
     assert.equal(response.status, 200)
-    assert.deepEqual(await response.json(), { activities })
+    assert.deepEqual(await response.json(), {
+      activities,
+      page: 1,
+      pageSize: 5,
+      totalRecords: 1,
+      totalPages: 1,
+    })
     activities = []
   })
 
@@ -105,7 +155,220 @@ describe('Activity API', () => {
     const response = await fetch(`${baseUrl}/api/activities`)
 
     assert.equal(response.status, 200)
-    assert.deepEqual(await response.json(), { activities: [] })
+    assert.deepEqual(await response.json(), {
+      activities: [],
+      page: 1,
+      pageSize: 5,
+      totalRecords: 0,
+      totalPages: 0,
+    })
+  })
+
+  it('paginates through all records and clamps pages past the end', async () => {
+    activities = Array.from({ length: 12 }, (_, index) =>
+      createActivityRecord(index + 1),
+    )
+
+    const firstPageResponse = await fetch(`${baseUrl}/api/activities`)
+    const firstPage = (await firstPageResponse.json()) as ActivityPage
+    assert.deepEqual(
+      firstPage.activities.map((activity: ActivityRecord) => activity.id),
+      [1, 2, 3, 4, 5],
+    )
+    assert.equal(firstPage.totalRecords, 12)
+    assert.equal(firstPage.totalPages, 3)
+
+    const secondPageResponse = await fetch(`${baseUrl}/api/activities?page=2`)
+    const secondPage = (await secondPageResponse.json()) as ActivityPage
+    assert.deepEqual(
+      secondPage.activities.map((activity: ActivityRecord) => activity.id),
+      [6, 7, 8, 9, 10],
+    )
+
+    const lastPageResponse = await fetch(`${baseUrl}/api/activities?page=3`)
+    const lastPage = (await lastPageResponse.json()) as ActivityPage
+    assert.deepEqual(
+      lastPage.activities.map((activity: ActivityRecord) => activity.id),
+      [11, 12],
+    )
+
+    const beyondLastPageResponse = await fetch(
+      `${baseUrl}/api/activities?page=99`,
+    )
+    const beyondLastPage = (await beyondLastPageResponse.json()) as ActivityPage
+    assert.equal(beyondLastPage.page, 3)
+    assert.deepEqual(
+      beyondLastPage.activities.map((activity: ActivityRecord) => activity.id),
+      [11, 12],
+    )
+    activities = []
+  })
+
+  it('uses the requested page size', async () => {
+    activities = Array.from({ length: 12 }, (_, index) =>
+      createActivityRecord(index + 1),
+    )
+
+    const firstPageResponse = await fetch(
+      `${baseUrl}/api/activities?pageSize=10`,
+    )
+    const firstPage = (await firstPageResponse.json()) as ActivityPage
+    assert.equal(firstPage.pageSize, 10)
+    assert.equal(firstPage.totalPages, 2)
+    assert.deepEqual(
+      firstPage.activities.map((activity) => activity.id),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    )
+
+    const lastPageResponse = await fetch(
+      `${baseUrl}/api/activities?page=2&pageSize=10`,
+    )
+    const lastPage = (await lastPageResponse.json()) as ActivityPage
+    assert.deepEqual(
+      lastPage.activities.map((activity) => activity.id),
+      [11, 12],
+    )
+    activities = []
+  })
+
+  it('rejects invalid page values', async () => {
+    for (const page of ['0', '-1', '1.5', 'abc', '9007199254740992']) {
+      const response = await fetch(
+        `${baseUrl}/api/activities?page=${encodeURIComponent(page)}`,
+      )
+      assert.equal(response.status, 400, `expected invalid page ${page}`)
+      assert.deepEqual(await response.json(), {
+        error: 'Page must be a positive integer.',
+      })
+    }
+  })
+
+  it('rejects unsupported page sizes', async () => {
+    for (const pageSize of ['0', '7', '1.5', 'abc', '101']) {
+      const response = await fetch(
+        `${baseUrl}/api/activities?pageSize=${encodeURIComponent(pageSize)}`,
+      )
+      assert.equal(
+        response.status,
+        400,
+        `expected invalid page size ${pageSize}`,
+      )
+      assert.deepEqual(await response.json(), {
+        error: 'Page size must be one of 5, 10, 25, 50, or 100.',
+      })
+    }
+  })
+
+  it('returns the complete details for one selected activity', async () => {
+    activities = [createActivityRecord(2), createActivityRecord(1)]
+    const response = await fetch(`${baseUrl}/api/activities/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [1] }),
+    })
+
+    assert.equal(response.status, 200)
+    const body = (await response.json()) as { activities: ActivityRecord[] }
+    assert.deepEqual(
+      body.activities.map((activity) => activity.id),
+      [1],
+    )
+    assert.deepEqual(Object.keys(body.activities[0]).sort(), [
+      'activity_date',
+      'application_filed',
+      'employer_address1',
+      'employer_address2',
+      'employer_city',
+      'employer_contact',
+      'employer_email',
+      'employer_name',
+      'employer_phone',
+      'employer_state',
+      'employer_zip',
+      'hiring_result',
+      'id',
+      'job_source',
+      'job_source_url',
+      'job_title',
+      'notes',
+      'result_other',
+      'start_date',
+    ])
+    activities = []
+  })
+
+  it('returns up to 10 selected activities in repository order', async () => {
+    activities = Array.from({ length: 10 }, (_, index) =>
+      createActivityRecord(index + 1),
+    )
+    const response = await fetch(`${baseUrl}/api/activities/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1] }),
+    })
+
+    assert.equal(response.status, 200)
+    const body = (await response.json()) as { activities: ActivityRecord[] }
+    assert.equal(body.activities.length, 10)
+    assert.deepEqual(
+      body.activities.map((activity) => activity.id),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    )
+    activities = []
+  })
+
+  it('rejects invalid export selections', async () => {
+    const invalidSelections: unknown[] = [
+      {},
+      { ids: [] },
+      { ids: Array.from({ length: 11 }, (_, index) => index + 1) },
+      { ids: [1, 1] },
+      { ids: [0] },
+      { ids: [-1] },
+      { ids: [1.5] },
+      { ids: ['1'] },
+    ]
+
+    for (const selection of invalidSelections) {
+      const response = await fetch(`${baseUrl}/api/activities/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selection),
+      })
+      assert.equal(response.status, 400)
+      assert.deepEqual(await response.json(), {
+        error:
+          'Select between 1 and 10 activities using unique positive integer IDs.',
+      })
+    }
+  })
+
+  it('returns not found when a selected activity no longer exists', async () => {
+    const response = await fetch(`${baseUrl}/api/activities/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [999] }),
+    })
+
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), {
+      error: 'One or more selected activities could not be found.',
+    })
+  })
+
+  it('returns a generic server error when selected activities fail to load', async () => {
+    exportFailure = true
+    const response = await fetch(`${baseUrl}/api/activities/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [1] }),
+    })
+    exportFailure = false
+
+    assert.equal(response.status, 500)
+    assert.deepEqual(await response.json(), {
+      error: 'Selected activities could not be loaded. Please try again.',
+    })
   })
 
   it('returns a generic server error if listing activities fails', async () => {

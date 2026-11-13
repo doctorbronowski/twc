@@ -9,7 +9,16 @@ export interface ActivityRecord extends ActivityInput {
 export interface ActivityRepository {
   createActivity(activity: ActivityInput): Promise<number>
   updateActivity(id: number, activity: ActivityInput): Promise<boolean>
-  listActivities(): Promise<ActivityRecord[]>
+  listActivities(page: number, pageSize: number): Promise<ActivityPage>
+  getActivitiesByIds(ids: number[]): Promise<ActivityRecord[]>
+}
+
+export interface ActivityPage {
+  activities: ActivityRecord[]
+  page: number
+  pageSize: number
+  totalRecords: number
+  totalPages: number
 }
 
 interface ActivityRow extends RowDataPacket {
@@ -32,6 +41,34 @@ interface ActivityRow extends RowDataPacket {
   application_filed: number
   result_other: string | null
   notes: string | null
+}
+
+interface ActivityCountRow extends RowDataPacket {
+  totalRecords: number
+}
+
+function mapActivityRow(row: ActivityRow): ActivityRecord {
+  return {
+    id: row.id,
+    activity_date: row.activity_date,
+    job_source: row.job_source,
+    job_source_url: row.job_source_url,
+    job_title: row.job_title,
+    employer_name: row.employer_name,
+    employer_address1: row.employer_address1,
+    employer_address2: row.employer_address2,
+    employer_city: row.employer_city,
+    employer_state: row.employer_state,
+    employer_zip: row.employer_zip,
+    employer_phone: row.employer_phone,
+    employer_contact: row.employer_contact,
+    employer_email: row.employer_email,
+    hiring_result: row.hiring_result,
+    start_date: row.start_date,
+    application_filed: Boolean(row.application_filed),
+    result_other: row.result_other,
+    notes: row.notes,
+  }
 }
 
 export class MySqlActivityRepository implements ActivityRepository {
@@ -145,7 +182,14 @@ export class MySqlActivityRepository implements ActivityRepository {
     return rows.length > 0
   }
 
-  async listActivities(): Promise<ActivityRecord[]> {
+  async listActivities(page: number, pageSize: number): Promise<ActivityPage> {
+    const [countRows] = await this.pool.execute<ActivityCountRow[]>(
+      'SELECT COUNT(*) AS totalRecords FROM work_search_activities',
+    )
+    const totalRecords = countRows[0].totalRecords
+    const totalPages = Math.ceil(totalRecords / pageSize)
+    const currentPage = Math.min(page, Math.max(totalPages, 1))
+    const offset = (currentPage - 1) * pageSize
     const [rows] = await this.pool.execute<ActivityRow[]>(
       `SELECT
         id,
@@ -169,29 +213,52 @@ export class MySqlActivityRepository implements ActivityRepository {
         notes
       FROM work_search_activities
       ORDER BY activity_date DESC, employer_name ASC, job_title ASC, id DESC
-      LIMIT 50`,
+      LIMIT ? OFFSET ?`,
+      [pageSize, offset],
     )
 
-    return rows.map((row) => ({
-      id: row.id,
-      activity_date: row.activity_date,
-      job_source: row.job_source,
-      job_source_url: row.job_source_url,
-      job_title: row.job_title,
-      employer_name: row.employer_name,
-      employer_address1: row.employer_address1,
-      employer_address2: row.employer_address2,
-      employer_city: row.employer_city,
-      employer_state: row.employer_state,
-      employer_zip: row.employer_zip,
-      employer_phone: row.employer_phone,
-      employer_contact: row.employer_contact,
-      employer_email: row.employer_email,
-      hiring_result: row.hiring_result,
-      start_date: row.start_date,
-      application_filed: Boolean(row.application_filed),
-      result_other: row.result_other,
-      notes: row.notes,
-    }))
+    return {
+      activities: rows.map(mapActivityRow),
+      page: currentPage,
+      pageSize,
+      totalRecords,
+      totalPages,
+    }
+  }
+
+  async getActivitiesByIds(ids: number[]): Promise<ActivityRecord[]> {
+    if (ids.length === 0) {
+      return []
+    }
+
+    const placeholders = ids.map(() => '?').join(', ')
+    const [rows] = await this.pool.execute<ActivityRow[]>(
+      `SELECT
+        id,
+        activity_date,
+        job_source,
+        job_source_url,
+        job_title,
+        employer_name,
+        employer_address1,
+        employer_address2,
+        employer_city,
+        employer_state,
+        employer_zip,
+        employer_phone,
+        employer_contact,
+        employer_email,
+        hiring_result,
+        start_date,
+        application_filed,
+        result_other,
+        notes
+      FROM work_search_activities
+      WHERE id IN (${placeholders})
+      ORDER BY activity_date DESC, employer_name ASC, job_title ASC, id DESC`,
+      ids,
+    )
+
+    return rows.map(mapActivityRow)
   }
 }
