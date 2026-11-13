@@ -3,6 +3,7 @@ import { type FormEvent, useState } from 'react'
 export interface ActivityFormValues {
   activity_date: string
   job_source: string
+  job_source_url: string
   job_title: string
   employer_name: string
   employer_address1: string
@@ -13,7 +14,7 @@ export interface ActivityFormValues {
   employer_phone: string
   employer_contact: string
   employer_email: string
-  hiring_result: string
+  hiring_result: '' | 'hired' | 'not_hired'
   start_date: string
   application_filed: boolean
   result_other: string
@@ -22,7 +23,12 @@ export interface ActivityFormValues {
 
 interface ActivityFormProps {
   isSubmitting: boolean
-  onClear: () => void
+  onClear?: () => void
+  onCancel?: () => void
+  errorMessage?: string | null
+  initialValue?: ActivityFormValues
+  isModal?: boolean
+  submitLabel?: string
   onSubmit: (activity: ActivityFormValues) => Promise<void>
 }
 
@@ -31,6 +37,7 @@ type TextFieldName = Exclude<keyof ActivityFormValues, 'application_filed'>
 const initialActivity: ActivityFormValues = {
   activity_date: '',
   job_source: '',
+  job_source_url: '',
   job_title: '',
   employer_name: '',
   employer_address1: '',
@@ -102,7 +109,7 @@ const states = [
   ['WY', 'Wyoming'],
 ] as const
 
-function formatPhone(value: string): string {
+export function formatPhone(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 10)
 
   if (digits.length === 0) {
@@ -120,16 +127,28 @@ function formatPhone(value: string): string {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
 }
 
-function ActivityForm({ isSubmitting, onClear, onSubmit }: ActivityFormProps) {
-  const [activity, setActivity] = useState(initialActivity)
+function ActivityForm({
+  isSubmitting,
+  onClear,
+  onCancel,
+  errorMessage,
+  initialValue = initialActivity,
+  isModal = false,
+  submitLabel = 'Submit',
+  onSubmit,
+}: ActivityFormProps) {
+  const [activity, setActivity] = useState(() => ({ ...initialValue }))
 
-  function updateField(field: TextFieldName, value: string) {
+  function updateField<K extends TextFieldName>(
+    field: K,
+    value: ActivityFormValues[K],
+  ) {
     setActivity((currentActivity) => ({ ...currentActivity, [field]: value }))
   }
 
   function handleClear() {
-    setActivity(initialActivity)
-    onClear()
+    setActivity({ ...initialActivity })
+    onClear?.()
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -138,7 +157,15 @@ function ActivityForm({ isSubmitting, onClear, onSubmit }: ActivityFormProps) {
   }
 
   return (
-    <form className="activity-form" onSubmit={handleSubmit}>
+    <form
+      className={`activity-form${isModal ? ' activity-edit-form' : ''}`}
+      onSubmit={handleSubmit}
+    >
+      {errorMessage && (
+        <p className="activity-form-error" role="alert">
+          {errorMessage}
+        </p>
+      )}
       <fieldset className="form-section">
         <legend>Activity details</legend>
         <div className="form-grid">
@@ -163,6 +190,18 @@ function ActivityForm({ isSubmitting, onClear, onSubmit }: ActivityFormProps) {
               value={activity.job_source}
               onChange={(event) =>
                 updateField('job_source', event.target.value)
+              }
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="job-source-url">Job Source URL</label>
+            <input
+              id="job-source-url"
+              name="job_source_url"
+              type="text"
+              value={activity.job_source_url}
+              onChange={(event) =>
+                updateField('job_source_url', event.target.value)
               }
             />
           </div>
@@ -328,9 +367,7 @@ function ActivityForm({ isSubmitting, onClear, onSubmit }: ActivityFormProps) {
                     name="hiring_result"
                     value="hired"
                     checked={activity.hiring_result === 'hired'}
-                    onChange={(event) =>
-                      updateField('hiring_result', event.target.value)
-                    }
+                    onChange={() => updateField('hiring_result', 'hired')}
                   />
                   <span>Hired</span>
                 </label>
@@ -340,8 +377,12 @@ function ActivityForm({ isSubmitting, onClear, onSubmit }: ActivityFormProps) {
                     name="hiring_result"
                     value="not_hired"
                     checked={activity.hiring_result === 'not_hired'}
-                    onChange={(event) =>
-                      updateField('hiring_result', event.target.value)
+                    onChange={() =>
+                      setActivity((currentActivity) => ({
+                        ...currentActivity,
+                        hiring_result: 'not_hired',
+                        start_date: '',
+                      }))
                     }
                   />
                   <span>Not Hired</span>
@@ -349,18 +390,20 @@ function ActivityForm({ isSubmitting, onClear, onSubmit }: ActivityFormProps) {
               </div>
             </fieldset>
           </div>
-          <div className="form-field">
-            <label htmlFor="start-date">Start Date</label>
-            <input
-              id="start-date"
-              name="start_date"
-              type="date"
-              value={activity.start_date}
-              onChange={(event) =>
-                updateField('start_date', event.target.value)
-              }
-            />
-          </div>
+          {activity.hiring_result === 'hired' && (
+            <div className="form-field">
+              <label htmlFor="start-date">Start Date</label>
+              <input
+                id="start-date"
+                name="start_date"
+                type="date"
+                value={activity.start_date}
+                onChange={(event) =>
+                  updateField('start_date', event.target.value)
+                }
+              />
+            </div>
+          )}
           <div className="form-field checkbox-field">
             <label className="choice checkbox-choice">
               <input
@@ -404,20 +447,31 @@ function ActivityForm({ isSubmitting, onClear, onSubmit }: ActivityFormProps) {
       </fieldset>
 
       <div className="form-actions">
-        <button
-          className="button button-secondary"
-          type="button"
-          onClick={handleClear}
-          disabled={isSubmitting}
-        >
-          Clear
-        </button>
+        {onCancel ? (
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={onCancel}
+            disabled={isSubmitting}
+          >
+            Cancel
+          </button>
+        ) : (
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={handleClear}
+            disabled={isSubmitting}
+          >
+            Clear
+          </button>
+        )}
         <button
           className="button button-primary"
           type="submit"
           disabled={isSubmitting}
         >
-          {isSubmitting ? 'Saving…' : 'Submit'}
+          {isSubmitting ? 'Saving…' : submitLabel}
         </button>
       </div>
     </form>

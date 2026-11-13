@@ -48,6 +48,44 @@ export function createApp(repository: ActivityRepository) {
     }
   })
 
+  app.put('/api/activities/:id', async (request, response) => {
+    const idValue = request.params.id
+    if (!/^[1-9]\d*$/.test(idValue)) {
+      response.status(400).json({ error: 'Activity ID is invalid.' })
+      return
+    }
+
+    const id = Number(idValue)
+    if (!Number.isSafeInteger(id)) {
+      response.status(400).json({ error: 'Activity ID is invalid.' })
+      return
+    }
+
+    const parsedActivity = parseActivity(request.body)
+    if (!parsedActivity.ok) {
+      response.status(400).json({ error: 'Activity data is invalid.' })
+      return
+    }
+
+    try {
+      const updated = await repository.updateActivity(id, parsedActivity.value)
+      if (!updated) {
+        response.status(404).json({ error: 'Activity was not found.' })
+        return
+      }
+
+      response.json({ id })
+    } catch (error) {
+      console.error(
+        'Unable to update activity:',
+        error instanceof Error ? error.message : 'Unknown database error',
+      )
+      response.status(500).json({
+        error: 'The activity could not be updated. Please try again.',
+      })
+    }
+  })
+
   app.use(
     (
       error: unknown,

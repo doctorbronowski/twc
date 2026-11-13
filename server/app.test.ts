@@ -16,6 +16,7 @@ describe('Activity API', () => {
   let activities: ActivityRecord[] = []
   let repositoryFailure = false
   let listFailure = false
+  let updateFailure = false
 
   const repository: ActivityRepository = {
     async createActivity(activity) {
@@ -26,6 +27,18 @@ describe('Activity API', () => {
       }
       savedActivity = activity
       return 42
+    },
+    async updateActivity(id, activity) {
+      if (updateFailure) {
+        throw new Error(
+          'Database connection details must not reach the response.',
+        )
+      }
+      if (id !== 42) {
+        return false
+      }
+      savedActivity = activity
+      return true
     },
     async listActivities() {
       if (listFailure) {
@@ -62,6 +75,7 @@ describe('Activity API', () => {
         id: 42,
         activity_date: '2026-11-12',
         job_source: 'Online application',
+        job_source_url: 'https://jobs.example.com/123',
         job_title: 'Developer',
         employer_name: 'Example Employer',
         employer_address1: '100 Main Street',
@@ -112,6 +126,7 @@ describe('Activity API', () => {
       body: JSON.stringify({
         activity_date: '2026-11-12',
         job_source: 'Online application',
+        job_source_url: 'https://jobs.example.com/123',
         job_title: 'Developer',
         employer_zip: '00123',
         employer_phone: '(512) 555-0123',
@@ -124,6 +139,7 @@ describe('Activity API', () => {
     assert.equal(response.status, 201)
     assert.deepEqual(await response.json(), { id: 42 })
     assert.equal(savedActivity?.job_source, 'Online application')
+    assert.equal(savedActivity?.job_source_url, 'https://jobs.example.com/123')
     assert.equal(savedActivity?.job_title, 'Developer')
     assert.equal(savedActivity?.employer_zip, '00123')
     assert.equal(savedActivity?.employer_phone, '5125550123')
@@ -158,6 +174,99 @@ describe('Activity API', () => {
     assert.equal(response.status, 400)
     assert.deepEqual(await response.json(), {
       error: 'Activity data is invalid.',
+    })
+  })
+
+  it('rejects a job source URL longer than the supported field size', async () => {
+    const response = await fetch(`${baseUrl}/api/activities`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_source_url: 'x'.repeat(2049) }),
+    })
+
+    assert.equal(response.status, 400)
+    assert.deepEqual(await response.json(), {
+      error: 'Activity data is invalid.',
+    })
+  })
+
+  it('updates all activity fields and normalizes blank values', async () => {
+    const response = await fetch(`${baseUrl}/api/activities/42`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        activity_date: '2026-11-12',
+        job_source: 'Company website',
+        job_source_url: 'https://jobs.example.com/456',
+        job_title: 'Engineer',
+        employer_phone: '(512) 555-0199',
+        employer_zip: '00123',
+        hiring_result: 'not_hired',
+        start_date: '',
+        application_filed: true,
+        notes: '',
+      }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { id: 42 })
+    assert.equal(savedActivity?.job_source_url, 'https://jobs.example.com/456')
+    assert.equal(savedActivity?.job_title, 'Engineer')
+    assert.equal(savedActivity?.employer_phone, '5125550199')
+    assert.equal(savedActivity?.employer_zip, '00123')
+    assert.equal(savedActivity?.hiring_result, 'not_hired')
+    assert.equal(savedActivity?.start_date, null)
+    assert.equal(savedActivity?.notes, null)
+    assert.equal(savedActivity?.application_filed, true)
+  })
+
+  it('rejects invalid activity IDs and update data', async () => {
+    const invalidIdResponse = await fetch(`${baseUrl}/api/activities/0`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    assert.equal(invalidIdResponse.status, 400)
+    assert.deepEqual(await invalidIdResponse.json(), {
+      error: 'Activity ID is invalid.',
+    })
+
+    const invalidDataResponse = await fetch(`${baseUrl}/api/activities/42`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activity_date: '2026-02-30' }),
+    })
+    assert.equal(invalidDataResponse.status, 400)
+    assert.deepEqual(await invalidDataResponse.json(), {
+      error: 'Activity data is invalid.',
+    })
+  })
+
+  it('returns not found when updating a missing activity', async () => {
+    const response = await fetch(`${baseUrl}/api/activities/99`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), {
+      error: 'Activity was not found.',
+    })
+  })
+
+  it('returns a generic server error if updating an activity fails', async () => {
+    updateFailure = true
+    const response = await fetch(`${baseUrl}/api/activities/42`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    updateFailure = false
+
+    assert.equal(response.status, 500)
+    assert.deepEqual(await response.json(), {
+      error: 'The activity could not be updated. Please try again.',
     })
   })
 

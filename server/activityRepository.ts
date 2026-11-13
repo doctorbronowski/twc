@@ -8,6 +8,7 @@ export interface ActivityRecord extends ActivityInput {
 
 export interface ActivityRepository {
   createActivity(activity: ActivityInput): Promise<number>
+  updateActivity(id: number, activity: ActivityInput): Promise<boolean>
   listActivities(): Promise<ActivityRecord[]>
 }
 
@@ -15,6 +16,7 @@ interface ActivityRow extends RowDataPacket {
   id: number
   activity_date: string | null
   job_source: string | null
+  job_source_url: string | null
   job_title: string | null
   employer_name: string | null
   employer_address1: string | null
@@ -44,6 +46,7 @@ export class MySqlActivityRepository implements ActivityRepository {
       `INSERT INTO work_search_activities (
         activity_date,
         job_source,
+        job_source_url,
         job_title,
         employer_name,
         employer_address1,
@@ -59,10 +62,11 @@ export class MySqlActivityRepository implements ActivityRepository {
         application_filed,
         result_other,
         notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         activity.activity_date,
         activity.job_source,
+        activity.job_source_url,
         activity.job_title,
         activity.employer_name,
         activity.employer_address1,
@@ -84,12 +88,70 @@ export class MySqlActivityRepository implements ActivityRepository {
     return result.insertId
   }
 
+  async updateActivity(id: number, activity: ActivityInput): Promise<boolean> {
+    const [result] = await this.pool.execute<ResultSetHeader>(
+      `UPDATE work_search_activities SET
+        activity_date = ?,
+        job_source = ?,
+        job_source_url = ?,
+        job_title = ?,
+        employer_name = ?,
+        employer_address1 = ?,
+        employer_address2 = ?,
+        employer_city = ?,
+        employer_state = ?,
+        employer_zip = ?,
+        employer_phone = ?,
+        employer_contact = ?,
+        employer_email = ?,
+        hiring_result = ?,
+        start_date = ?,
+        application_filed = ?,
+        result_other = ?,
+        notes = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?`,
+      [
+        activity.activity_date,
+        activity.job_source,
+        activity.job_source_url,
+        activity.job_title,
+        activity.employer_name,
+        activity.employer_address1,
+        activity.employer_address2,
+        activity.employer_city,
+        activity.employer_state,
+        activity.employer_zip,
+        activity.employer_phone,
+        activity.employer_contact,
+        activity.employer_email,
+        activity.hiring_result,
+        activity.start_date,
+        activity.application_filed,
+        activity.result_other,
+        activity.notes,
+        id,
+      ],
+    )
+
+    if (result.affectedRows > 0) {
+      return true
+    }
+
+    const [rows] = await this.pool.execute<ActivityRow[]>(
+      'SELECT id FROM work_search_activities WHERE id = ? LIMIT 1',
+      [id],
+    )
+    return rows.length > 0
+  }
+
   async listActivities(): Promise<ActivityRecord[]> {
     const [rows] = await this.pool.execute<ActivityRow[]>(
       `SELECT
         id,
         activity_date,
         job_source,
+        job_source_url,
         job_title,
         employer_name,
         employer_address1,
@@ -114,6 +176,7 @@ export class MySqlActivityRepository implements ActivityRepository {
       id: row.id,
       activity_date: row.activity_date,
       job_source: row.job_source,
+      job_source_url: row.job_source_url,
       job_title: row.job_title,
       employer_name: row.employer_name,
       employer_address1: row.employer_address1,

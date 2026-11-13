@@ -71,6 +71,21 @@ async function renameActivityColumn(previousName: string, newName: string) {
   }
 }
 
+async function ensureJobSourceUrlColumn() {
+  const [columns] = await connection.execute<ColumnNameRow[]>(
+    `SELECT COLUMN_NAME
+      FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    ['twc', 'work_search_activities', 'job_source_url'],
+  )
+
+  if (columns.length === 0) {
+    await connection.query(
+      'ALTER TABLE work_search_activities ADD COLUMN job_source_url VARCHAR(2048) NULL AFTER job_source',
+    )
+  }
+}
+
 try {
   await connection.query(
     'CREATE DATABASE IF NOT EXISTS `twc` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
@@ -87,11 +102,12 @@ try {
   await connection.query(migration)
   await renameActivityColumn('work_search_type', 'job_source')
   await renameActivityColumn('job_type', 'job_title')
+  await ensureJobSourceUrlColumn()
   await connection.query(
     `CREATE USER IF NOT EXISTS 'twc_app'@'127.0.0.1' IDENTIFIED BY ${connection.escape(runtimePassword)}`,
   )
   await connection.query(
-    "GRANT SELECT, INSERT ON `twc`.`work_search_activities` TO 'twc_app'@'127.0.0.1'",
+    "GRANT SELECT, INSERT, UPDATE ON `twc`.`work_search_activities` TO 'twc_app'@'127.0.0.1'",
   )
 
   console.log('Database twc and work_search_activities table are ready.')

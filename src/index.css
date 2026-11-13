@@ -250,6 +250,25 @@ a {
   box-shadow: 0 0.75rem 2.25rem rgb(23 32 51 / 5%);
 }
 
+.activity-edit-form {
+  min-height: 0;
+  padding: 1.25rem 1.5rem;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.activity-form-error {
+  margin: 0 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #e6b4b1;
+  border-radius: 0.6rem;
+  color: #842d2a;
+  background: #fff2f1;
+  font-size: 0.92rem;
+}
+
 .form-section {
   min-width: 0;
   margin: 0;
@@ -274,7 +293,7 @@ a {
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.15rem 1.25rem;
 }
 
@@ -494,6 +513,15 @@ a {
   font-size: 0.9rem;
 }
 
+.search-results-title {
+  padding: 0.75rem 1rem;
+  color: #172033;
+  font-size: clamp(1.25rem, 3vw, 1.6rem);
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: left;
+}
+
 .search-table-container {
   width: 100%;
   overflow-x: auto;
@@ -504,7 +532,7 @@ a {
 
 .search-table {
   width: 100%;
-  min-width: 40rem;
+  min-width: 43rem;
   border-collapse: collapse;
   text-align: left;
 }
@@ -525,6 +553,10 @@ a {
 }
 
 .search-table th:first-child {
+  width: 6rem;
+}
+
+.search-table th:nth-child(2) {
   width: 6rem;
 }
 
@@ -717,13 +749,17 @@ textarea:focus-visible {
     padding: 1.15rem;
   }
 
+  .activity-edit-form {
+    padding: 1rem;
+  }
+
   .notice-banner {
     width: min(100% - 2rem, 72rem);
     align-items: flex-start;
   }
 
   .search-table {
-    min-width: 40rem;
+    min-width: 43rem;
   }
 
   .activity-dialog {

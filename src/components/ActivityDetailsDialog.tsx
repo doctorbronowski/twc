@@ -4,6 +4,7 @@ export interface SearchActivity {
   id: number
   activity_date: string | null
   job_source: string | null
+  job_source_url: string | null
   job_title: string | null
   employer_name: string | null
   employer_address1: string | null
@@ -61,6 +62,7 @@ function ActivityDetailsDialog({
   const details = [
     ['Date of Activity', displayValue(activity.activity_date)],
     ['Job Source', displayValue(activity.job_source)],
+    ['Job Source URL', displayValue(activity.job_source_url)],
     ['Job Title', displayValue(activity.job_title)],
     ['Employer Name', displayValue(activity.employer_name)],
     ['Employer Address 1', displayValue(activity.employer_address1)],
@@ -79,7 +81,9 @@ function ActivityDetailsDialog({
           ? 'Not Hired'
           : '—',
     ],
-    ['Start Date', displayValue(activity.start_date)],
+    ...(activity.hiring_result === 'hired'
+      ? [['Start Date', displayValue(activity.start_date)]]
+      : []),
     ['Application Filed', activity.application_filed ? 'Yes' : 'No'],
     ['Result Other', displayValue(activity.result_other)],
     ['Notes', displayValue(activity.notes)],

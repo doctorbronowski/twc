@@ -1,6 +1,7 @@
 export interface ActivityInput {
   activity_date: string | null
   job_source: string | null
+  job_source_url: string | null
   job_title: string | null
   employer_name: string | null
   employer_address1: string | null
@@ -30,7 +31,7 @@ function optionalText(
   value: unknown,
   maxLength: number,
 ): string | null | typeof invalid {
-  if (value === undefined || value === null) {
+  if (value === undefined || value === null || value === '') {
     return null
   }
 
@@ -77,6 +78,7 @@ export function parseActivity(value: unknown): ParsedActivity {
 
   const activityDate = optionalDate(value.activity_date)
   const jobSource = optionalText(value.job_source, 255)
+  const jobSourceUrl = optionalText(value.job_source_url, 2048)
   const jobTitle = optionalText(value.job_title, 255)
   const employerName = optionalText(value.employer_name, 255)
   const employerAddress1 = optionalText(value.employer_address1, 255)
@@ -102,6 +104,7 @@ export function parseActivity(value: unknown): ParsedActivity {
   if (
     activityDate === invalid ||
     jobSource === invalid ||
+    jobSourceUrl === invalid ||
     jobTitle === invalid ||
     employerName === invalid ||
     employerAddress1 === invalid ||
@@ -128,6 +131,7 @@ export function parseActivity(value: unknown): ParsedActivity {
     value: {
       activity_date: activityDate,
       job_source: jobSource,
+      job_source_url: jobSourceUrl,
       job_title: jobTitle,
       employer_name: employerName,
       employer_address1: employerAddress1,

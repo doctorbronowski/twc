@@ -21,8 +21,8 @@ interface AppFrameProps {
 
 const navigation: { label: string; href: string; page: Page }[] = [
   { label: 'Home', href: '/', page: 'home' },
-  { label: 'Enter', href: '/enter', page: 'enter' },
-  { label: 'Search', href: '/search', page: 'search' },
+  { label: 'Enter Activity', href: '/enter', page: 'enter' },
+  { label: 'View/Edit Activities', href: '/search', page: 'search' },
 ]
 
 function AppFrame({
@@ -196,9 +196,28 @@ function EnterPage() {
 }
 
 function SearchPage() {
+  const [notice, setNotice] = useState<Notice | null>(null)
+
+  useEffect(() => {
+    if (notice) {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }, [notice])
+
   return (
-    <AppFrame activePage="search">
-      <ActivitySearchPage />
+    <AppFrame
+      activePage="search"
+      notice={notice}
+      onDismissNotice={() => setNotice(null)}
+    >
+      <ActivitySearchPage
+        onEditSuccess={() =>
+          setNotice({
+            type: 'success',
+            message: 'Activity updated successfully.',
+          })
+        }
+      />
     </AppFrame>
   )
 }

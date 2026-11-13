@@ -2,10 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import ActivityDetailsDialog, {
   type SearchActivity,
 } from './ActivityDetailsDialog.tsx'
+import type { ActivityFormValues } from './ActivityForm.tsx'
+import EditActivityDialog from './EditActivityDialog.tsx'
+
+interface ActivitySearchPageProps {
+  onEditSuccess: () => void
+}
 
 const nullableStringFields = [
   'activity_date',
   'job_source',
+  'job_source_url',
   'job_title',
   'employer_name',
   'employer_address1',
@@ -59,20 +66,28 @@ function displayValue(value: string | null): string {
   return value?.trim() ? value : '—'
 }
 
-function ActivitySearchPage() {
+function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
   const [activities, setActivities] = useState<SearchActivity[]>([])
   const [selectedActivity, setSelectedActivity] =
     useState<SearchActivity | null>(null)
+  const [editingActivity, setEditingActivity] = useState<SearchActivity | null>(
+    null,
+  )
   const [isLoading, setIsLoading] = useState(true)
   const [hasLoadError, setHasLoadError] = useState(false)
+  const [refreshVersion, setRefreshVersion] = useState(0)
   const viewButtonRef = useRef<HTMLButtonElement | null>(null)
+  const editButtonRef = useRef<HTMLButtonElement | null>(null)
+  const searchTitleRef = useRef<HTMLHeadingElement | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
 
     async function loadActivities() {
       setIsLoading(true)
-      setHasLoadError(false)
+      if (refreshVersion > 0) {
+        setHasLoadError(false)
+      }
 
       try {
         const response = await fetch('/api/activities', {
@@ -102,13 +117,33 @@ function ActivitySearchPage() {
 
     void loadActivities()
     return () => controller.abort()
-  }, [])
+  }, [refreshVersion])
+
+  async function handleEditSave(
+    id: number,
+    values: ActivityFormValues,
+  ): Promise<void> {
+    const response = await fetch(`/api/activities/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(values),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Activity update returned HTTP ${response.status}.`)
+    }
+
+    onEditSuccess()
+    setRefreshVersion((version) => version + 1)
+  }
 
   return (
     <>
       <section className="page-intro" aria-labelledby="search-title">
         <p className="eyebrow">Work search activity</p>
-        <h1 id="search-title">Search</h1>
+        <h1 id="search-title" ref={searchTitleRef} tabIndex={-1}>
+          Search
+        </h1>
         <p>
           View your 50 most recent activities, sorted by activity date,
           employer, and job title.
@@ -138,12 +173,13 @@ function ActivitySearchPage() {
             aria-label="Search results"
           >
             <table className="search-table">
-              <caption className="visually-hidden">
+              <caption className="search-results-title">
                 Recent work-search activities
               </caption>
               <thead>
                 <tr>
-                  <th scope="col">View</th>
+                  <th scope="col" aria-label="Activity actions"></th>
+                  <th scope="col" aria-label="Edit activity action"></th>
                   <th scope="col">Date of Activity</th>
                   <th scope="col">Employer Name</th>
                   <th scope="col">Job Title</th>
@@ -165,6 +201,19 @@ function ActivitySearchPage() {
                         View
                       </button>
                     </td>
+                    <td>
+                      <button
+                        className="view-activity-button"
+                        type="button"
+                        aria-label={`Edit activity for ${displayValue(activity.employer_name)}`}
+                        onClick={(event) => {
+                          editButtonRef.current = event.currentTarget
+                          setEditingActivity(activity)
+                        }}
+                      >
+                        Edit
+                      </button>
+                    </td>
                     <td>{displayValue(activity.activity_date)}</td>
                     <td>{displayValue(activity.employer_name)}</td>
                     <td>{displayValue(activity.job_title)}</td>
@@ -182,6 +231,20 @@ function ActivitySearchPage() {
           setSelectedActivity(null)
           requestAnimationFrame(() => viewButtonRef.current?.focus())
         }}
+      />
+      <EditActivityDialog
+        activity={editingActivity}
+        onClose={() => {
+          setEditingActivity(null)
+          requestAnimationFrame(() => {
+            if (editButtonRef.current?.isConnected) {
+              editButtonRef.current.focus()
+            } else {
+              searchTitleRef.current?.focus()
+            }
+          })
+        }}
+        onSave={handleEditSave}
       />
     </>
   )
