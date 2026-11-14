@@ -9,6 +9,7 @@
     "dev:server": "node --env-file-if-exists=.env.local --import tsx server/index.ts",
     "db:setup": "node --env-file-if-exists=.env.local --import tsx server/setupDatabase.ts",
     "build": "tsc -b && vite build",
+    "start": "node app.js",
     "lint": "biome check .",
     "test": "node --import tsx --test server/*.test.ts",
     "preview": "vite preview"

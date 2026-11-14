@@ -1,6 +1,14 @@
+import path from 'node:path'
 import express from 'express'
 import { parseActivity } from './activityInput.ts'
 import type { ActivityRepository } from './activityRepository.ts'
+import {
+  type AuthConfig,
+  clearSessionCookie,
+  getAuthenticatedUsername,
+  isValidLogin,
+  setSessionCookie,
+} from './auth.ts'
 
 const activityPageSizes = new Set([5, 10, 25, 50, 100])
 const defaultActivityPageSize = 5
@@ -54,13 +62,98 @@ function parseActivityIds(value: unknown): number[] | null {
   return new Set(ids).size === ids.length ? ids : null
 }
 
-export function createApp(repository: ActivityRepository) {
-  const app = express()
+interface AppOptions {
+  staticDirectory?: string
+}
 
+export function createApp(
+  repository: ActivityRepository,
+  authConfig: AuthConfig,
+  options: AppOptions = {},
+) {
+  const app = express()
+  const failedLogins = new Map<string, { attempts: number; resetAt: number }>()
+
+  app.disable('x-powered-by')
   app.use(express.json({ limit: '64kb' }))
+  app.use('/api', (_request, response, next) => {
+    response.setHeader('Cache-Control', 'no-store')
+    next()
+  })
 
   app.get('/api/health', (_request, response) => {
     response.json({ status: 'ok' })
+  })
+
+  app.get('/api/auth/session', (request, response) => {
+    const username = getAuthenticatedUsername(request, authConfig)
+    if (!username) {
+      response.status(401).json({ error: 'Authentication required.' })
+      return
+    }
+
+    response.json({ authenticated: true, username })
+  })
+
+  app.post('/api/auth/login', (request, response) => {
+    const clientKey = request.socket.remoteAddress ?? 'unknown'
+    const now = Date.now()
+    for (const [key, value] of failedLogins) {
+      if (value.resetAt <= now) {
+        failedLogins.delete(key)
+      }
+    }
+
+    if (!failedLogins.has(clientKey) && failedLogins.size >= 1000) {
+      const firstKey = failedLogins.keys().next().value
+      if (firstKey) {
+        failedLogins.delete(firstKey)
+      }
+    }
+
+    const attempt = failedLogins.get(clientKey)
+    if (attempt && attempt.resetAt <= now) {
+      failedLogins.delete(clientKey)
+    } else if (attempt && attempt.attempts >= 10) {
+      response.setHeader(
+        'Retry-After',
+        Math.ceil((attempt.resetAt - now) / 1000),
+      )
+      response.status(429).json({
+        error: 'Too many sign-in attempts. Please try again later.',
+      })
+      return
+    }
+
+    if (
+      !isValidLogin(request.body?.username, request.body?.password, authConfig)
+    ) {
+      const currentAttempt = failedLogins.get(clientKey)
+      failedLogins.set(clientKey, {
+        attempts: (currentAttempt?.attempts ?? 0) + 1,
+        resetAt: currentAttempt?.resetAt ?? now + 15 * 60 * 1000,
+      })
+      response.status(401).json({ error: 'Username or password is incorrect.' })
+      return
+    }
+
+    failedLogins.delete(clientKey)
+    setSessionCookie(response, authConfig)
+    response.json({ authenticated: true, username: authConfig.username })
+  })
+
+  app.post('/api/auth/logout', (_request, response) => {
+    clearSessionCookie(response, authConfig)
+    response.status(204).end()
+  })
+
+  app.use('/api', (request, response, next) => {
+    if (getAuthenticatedUsername(request, authConfig)) {
+      next()
+      return
+    }
+
+    response.status(401).json({ error: 'Authentication required.' })
   })
 
   app.get('/api/activities', async (request, response) => {
@@ -208,6 +301,28 @@ export function createApp(repository: ActivityRepository) {
       next(error)
     },
   )
+
+  if (options.staticDirectory) {
+    const staticDirectory = options.staticDirectory
+    app.use(
+      express.static(staticDirectory, {
+        index: false,
+      }),
+    )
+
+    app.get('/{*path}', (request, response, next) => {
+      if (request.path === '/api' || request.path.startsWith('/api/')) {
+        next()
+        return
+      }
+
+      response.sendFile(path.join(staticDirectory, 'index.html'))
+    })
+  }
+
+  app.use('/api', (_request, response) => {
+    response.status(404).json({ error: 'API route was not found.' })
+  })
 
   return app
 }
