@@ -13,14 +13,10 @@ project.
 ```sh
 pnpm install
 cp .env.example .env.local
-# Set DB_PASSWORD, APP_USERNAME, APP_PASSWORD, and SESSION_SECRET in .env.local.
+# Set DB_PASSWORD in .env.local.
 DB_ADMIN_USER=xxxx DB_ADMIN_PASSWORD='your-local-mysql-admin-password' pnpm db:setup
 pnpm dev
 ```
-
-`APP_PASSWORD` must contain at least 16 characters. Generate a random
-`SESSION_SECRET` with `openssl rand -base64 48`; it must contain at least 32
-characters. Keep both values private and out of Git.
 
 The frontend is available directly at <http://127.0.0.1:5174> and through
 Apache at <http://twc.local.com>. The API listens on `127.0.0.1:3002`; Vite
@@ -33,11 +29,6 @@ an existing activity. Database setup creates the `twc` schema and a `twc_app`
 account with only `SELECT`, `INSERT`, and `UPDATE` access to the activity
 table. The admin credentials are used only for the one-time setup command and
 should not be saved in `.env.local` or committed.
-
-All activity API routes require the single-owner sign-in. The session cookie is
-HTTP-only and uses `SameSite=Lax`; production cookies are also marked
-`Secure`. Sign-in attempts are temporarily limited after repeated failures.
-Changing `SESSION_SECRET` invalidates existing sessions.
 
 Apache must be running to use the `twc.local.com` address. In this environment
 it is started manually; if it is stopped, run
@@ -53,9 +44,10 @@ compatibility with Passenger's loader. Production requires
 `NODE_ENV=production` and uses the hosting platform's `PORT` when available,
 falling back to port `3000`; configure
 `DB_HOST`, `DB_PORT`, `DB_NAME`,
-`DB_USER`, `DB_PASSWORD`, `APP_USERNAME`, `APP_PASSWORD`, and `SESSION_SECRET`
-in cPanel's application environment. Do not upload `.env.local` or use the
-local database setup script on the hosting account.
+`DB_USER`, and `DB_PASSWORD` in cPanel's application environment. Do not upload
+`.env.local` or use the local database setup script on the hosting account.
+The document-root `.htaccess` should hold only the Passenger directives for
+this Node app; leave out any legacy PHP rewrite rules.
 
 ## Pages
 
