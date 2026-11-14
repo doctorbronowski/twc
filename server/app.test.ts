@@ -98,23 +98,11 @@ describe('Activity API', () => {
     },
   }
 
-  const authConfig = {
-    username: 'owner',
-    password: 'a-test-password-that-is-long-enough',
-    sessionSecret: 'test-session-secret-with-more-than-thirty-two-characters',
-    secureCookies: false,
-  }
-  let sessionCookie = ''
-
   async function fetch(
     input: string | URL,
     init?: RequestInit,
   ): Promise<Response> {
-    const headers = new Headers(init?.headers)
-    if (sessionCookie) {
-      headers.set('Cookie', sessionCookie)
-    }
-    return globalThis.fetch(input, { ...init, headers })
+    return globalThis.fetch(input, init)
   }
 
   before(async () => {
@@ -123,26 +111,13 @@ describe('Activity API', () => {
       path.join(staticDirectory, 'index.html'),
       '<!doctype html><title>TWC production test</title>',
     )
-    server = createApp(repository, authConfig, { staticDirectory }).listen(
+    server = createApp(repository, undefined, { staticDirectory }).listen(
       0,
       '127.0.0.1',
     )
     await once(server, 'listening')
     const address = server.address() as AddressInfo
     baseUrl = `http://127.0.0.1:${address.port}`
-
-    const loginResponse = await globalThis.fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username: authConfig.username,
-        password: authConfig.password,
-      }),
-    })
-    assert.equal(loginResponse.status, 200)
-    const setCookie = loginResponse.headers.get('set-cookie')
-    assert.ok(setCookie)
-    sessionCookie = setCookie.split(';', 1)[0]
   })
 
   after(async () => {
@@ -158,51 +133,18 @@ describe('Activity API', () => {
     assert.deepEqual(await response.json(), { status: 'ok' })
   })
 
-  it('rejects unauthenticated access to activity data', async () => {
+  it('allows direct API access without authentication', async () => {
     const response = await globalThis.fetch(`${baseUrl}/api/activities`)
 
-    assert.equal(response.status, 401)
+    assert.equal(response.status, 200)
     assert.equal(response.headers.get('cache-control'), 'no-store')
     assert.deepEqual(await response.json(), {
-      error: 'Authentication required.',
+      activities: [],
+      page: 1,
+      pageSize: 5,
+      totalRecords: 0,
+      totalPages: 0,
     })
-  })
-
-  it('rejects invalid sign-in credentials without setting a session cookie', async () => {
-    const response = await globalThis.fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username: authConfig.username,
-        password: 'incorrect-password',
-      }),
-    })
-
-    assert.equal(response.status, 401)
-    assert.deepEqual(await response.json(), {
-      error: 'Username or password is incorrect.',
-    })
-    assert.equal(response.headers.get('set-cookie'), null)
-  })
-
-  it('reports the signed-in user and clears the browser session on sign-out', async () => {
-    const sessionResponse = await fetch(`${baseUrl}/api/auth/session`)
-    assert.equal(sessionResponse.status, 200)
-    assert.deepEqual(await sessionResponse.json(), {
-      authenticated: true,
-      username: authConfig.username,
-    })
-
-    const logoutResponse = await fetch(`${baseUrl}/api/auth/logout`, {
-      method: 'POST',
-    })
-    assert.equal(logoutResponse.status, 204)
-    assert.match(logoutResponse.headers.get('set-cookie') ?? '', /Max-Age=0/)
-
-    const signedOutResponse = await globalThis.fetch(
-      `${baseUrl}/api/auth/session`,
-    )
-    assert.equal(signedOutResponse.status, 401)
   })
 
   it('serves the React app on direct page loads without treating API paths as pages', async () => {
@@ -665,31 +607,4 @@ describe('Activity API', () => {
     })
   })
 
-  it('temporarily limits repeated failed sign-in attempts', async () => {
-    for (let attempt = 0; attempt < 9; attempt += 1) {
-      const response = await globalThis.fetch(`${baseUrl}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: authConfig.username,
-          password: 'incorrect-password',
-        }),
-      })
-      assert.equal(response.status, 401)
-    }
-
-    const limitedResponse = await globalThis.fetch(
-      `${baseUrl}/api/auth/login`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: authConfig.username,
-          password: 'incorrect-password',
-        }),
-      },
-    )
-    assert.equal(limitedResponse.status, 429)
-    assert.ok(limitedResponse.headers.get('retry-after'))
-  })
 })

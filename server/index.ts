@@ -1,7 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { MySqlActivityRepository } from './activityRepository.ts'
 import { createApp } from './app.ts'
-import { loadAuthConfig } from './auth.ts'
 import { createDatabasePool } from './database.ts'
 
 const isProduction = process.env.NODE_ENV === 'production'
@@ -21,10 +20,9 @@ if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   )
 }
 
-const authConfig = loadAuthConfig()
 const pool = createDatabasePool()
 await pool.query('SELECT 1')
-const app = createApp(new MySqlActivityRepository(pool), authConfig, {
+const app = createApp(new MySqlActivityRepository(pool), undefined, {
   staticDirectory: isProduction
     ? fileURLToPath(new URL('../dist/', import.meta.url))
     : undefined,
