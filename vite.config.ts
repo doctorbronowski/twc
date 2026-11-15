@@ -8,6 +8,9 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
     allowedHosts: ['twc.local.com'],
+    headers: {
+      'Referrer-Policy': 'no-referrer',
+    },
     proxy: {
       '/api': 'http://127.0.0.1:3002',
     },

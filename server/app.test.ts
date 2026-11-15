@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
@@ -12,6 +13,20 @@ import type {
   ActivityRepository,
 } from './activityRepository.ts'
 import { createApp } from './app.ts'
+import type { AuthAccount, AuthRepository } from './auth.ts'
+import { AuthenticationService, sessionCookieName } from './auth.ts'
+
+const authenticatedAccount: AuthAccount = {
+  id: 8,
+  username: 'activity-owner@example.com',
+  pendingEmail: null,
+  passwordHash: 'unused-by-session-test',
+  emailVerifiedAt: new Date().toISOString(),
+  disabledAt: null,
+}
+const sessionToken = 'A'.repeat(43)
+const sessionTokenHash = createHash('sha256').update(sessionToken).digest()
+const allowedOrigin = 'http://127.0.0.1:5174'
 
 function createActivityRecord(id: number): ActivityRecord {
   return {
@@ -47,54 +62,130 @@ describe('Activity API', () => {
   let listFailure = false
   let exportFailure = false
   let updateFailure = false
+  let lastAccountId: number | undefined
+  const activityOwners = new Map<number, number>()
+
+  const authRepository: AuthRepository = {
+    async findAccountByUsername(username) {
+      return username === authenticatedAccount.username
+        ? authenticatedAccount
+        : null
+    },
+    async findAccountById(id) {
+      return id === authenticatedAccount.id ? authenticatedAccount : null
+    },
+    async createAccount() {
+      return null
+    },
+    async storeEmailVerificationToken() {},
+    async consumeEmailVerificationToken() {
+      return false
+    },
+    async storePasswordResetToken() {},
+    async resetPasswordWithToken() {
+      return false
+    },
+    async changePassword() {
+      return false
+    },
+    async deactivateAccount(accountId) {
+      if (accountId !== authenticatedAccount.id) {
+        return false
+      }
+      authenticatedAccount.disabledAt = new Date().toISOString()
+      return true
+    },
+    async requestEmailChange() {
+      return 'stored'
+    },
+    async resendEmailChangeToken() {
+      return false
+    },
+    async cancelEmailChange() {},
+    async completeEmailChange() {
+      return { status: 'invalid-token' }
+    },
+    async createSession() {},
+    async getAndTouchSession(tokenHash) {
+      if (
+        !tokenHash.equals(sessionTokenHash) ||
+        authenticatedAccount.disabledAt !== null
+      ) {
+        return null
+      }
+      return {
+        sessionId: 1,
+        id: authenticatedAccount.id,
+        username: authenticatedAccount.username,
+      }
+    },
+    async revokeSession() {},
+  }
 
   const repository: ActivityRepository = {
-    async createActivity(activity) {
+    async createActivity(accountId, activity) {
       if (repositoryFailure) {
         throw new Error(
           'Database connection details must not reach the response.',
         )
       }
+      lastAccountId = accountId
       savedActivity = activity
       return 42
     },
-    async updateActivity(id, activity) {
+    async updateActivity(accountId, id, activity) {
       if (updateFailure) {
         throw new Error(
           'Database connection details must not reach the response.',
         )
       }
-      if (id !== 42) {
+      lastAccountId = accountId
+      if (
+        (activityOwners.get(id) ?? authenticatedAccount.id) !== accountId ||
+        id !== 42
+      ) {
         return false
       }
       savedActivity = activity
       return true
     },
-    async listActivities(page, pageSize): Promise<ActivityPage> {
+    async listActivities(accountId, page, pageSize): Promise<ActivityPage> {
       if (listFailure) {
         throw new Error(
           'Database connection details must not reach the response.',
         )
       }
-      const totalRecords = activities.length
+      lastAccountId = accountId
+      const ownedActivities = activities.filter(
+        (activity) =>
+          (activityOwners.get(activity.id) ?? authenticatedAccount.id) ===
+          accountId,
+      )
+      const totalRecords = ownedActivities.length
       const totalPages = Math.ceil(totalRecords / pageSize)
       const currentPage = Math.min(page, Math.max(totalPages, 1))
       const start = (currentPage - 1) * pageSize
       return {
-        activities: activities.slice(start, start + pageSize),
+        activities: ownedActivities.slice(start, start + pageSize),
         page: currentPage,
         pageSize,
         totalRecords,
         totalPages,
       }
     },
-    async getActivitiesByIds(ids) {
+    async getActivitiesByIds(accountId, ids) {
       if (exportFailure) {
         throw new Error(
           'Database connection details must not reach the response.',
         )
       }
-      return activities.filter((activity) => ids.includes(activity.id))
+      lastAccountId = accountId
+      return activities.filter(
+        (activity) =>
+          ids.includes(activity.id) &&
+          (activityOwners.get(activity.id) ?? authenticatedAccount.id) ===
+            accountId,
+      )
     },
   }
 
@@ -102,7 +193,12 @@ describe('Activity API', () => {
     input: string | URL,
     init?: RequestInit,
   ): Promise<Response> {
-    return globalThis.fetch(input, init)
+    const headers = new Headers(init?.headers)
+    headers.set('Cookie', `${sessionCookieName}=${sessionToken}`)
+    if (init?.method && init.method !== 'GET' && init.method !== 'HEAD') {
+      headers.set('Origin', allowedOrigin)
+    }
+    return globalThis.fetch(input, { ...init, headers })
   }
 
   before(async () => {
@@ -111,10 +207,17 @@ describe('Activity API', () => {
       path.join(staticDirectory, 'index.html'),
       '<!doctype html><title>TWC production test</title>',
     )
-    server = createApp(repository, undefined, { staticDirectory }).listen(
-      0,
-      '127.0.0.1',
-    )
+    const authService = new AuthenticationService(authRepository, {
+      async sendVerificationEmail() {},
+      async sendPasswordResetEmail() {},
+      async sendEmailChangeVerificationEmail() {},
+      async sendEmailChangeNotification() {},
+    })
+    server = createApp(repository, {
+      authService,
+      allowedOrigins: new Set([allowedOrigin]),
+      staticDirectory,
+    }).listen(0, '127.0.0.1')
     await once(server, 'listening')
     const address = server.address() as AddressInfo
     baseUrl = `http://127.0.0.1:${address.port}`
@@ -133,24 +236,47 @@ describe('Activity API', () => {
     assert.deepEqual(await response.json(), { status: 'ok' })
   })
 
-  it('allows direct API access without authentication', async () => {
+  it('requires authentication for every activity API operation', async () => {
     const response = await globalThis.fetch(`${baseUrl}/api/activities`)
-
-    assert.equal(response.status, 200)
-    assert.equal(response.headers.get('cache-control'), 'no-store')
+    assert.equal(response.status, 401)
     assert.deepEqual(await response.json(), {
-      activities: [],
-      page: 1,
-      pageSize: 5,
-      totalRecords: 0,
-      totalPages: 0,
+      error: 'Authentication is required.',
+    })
+
+    for (const [url, method] of [
+      ['/api/activities/export', 'POST'],
+      ['/api/activities', 'POST'],
+      ['/api/activities/42', 'PUT'],
+    ]) {
+      const protectedResponse = await globalThis.fetch(`${baseUrl}${url}`, {
+        method,
+      })
+      assert.equal(protectedResponse.status, 401)
+    }
+  })
+
+  it('rejects cookie-authenticated writes without a trusted origin', async () => {
+    const response = await globalThis.fetch(`${baseUrl}/api/activities`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `${sessionCookieName}=${sessionToken}`,
+      },
+      body: JSON.stringify({}),
+    })
+
+    assert.equal(response.status, 403)
+    assert.deepEqual(await response.json(), {
+      error: 'Request origin is not allowed.',
     })
   })
 
   it('serves the React app on direct page loads without treating API paths as pages', async () => {
-    const pageResponse = await fetch(`${baseUrl}/export/print`)
-    assert.equal(pageResponse.status, 200)
-    assert.match(await pageResponse.text(), /TWC production test/)
+    for (const path of ['/export/print', '/account']) {
+      const pageResponse = await fetch(`${baseUrl}${path}`)
+      assert.equal(pageResponse.status, 200)
+      assert.match(await pageResponse.text(), /TWC production test/)
+    }
 
     const unknownApiResponse = await fetch(`${baseUrl}/api/unknown`)
     assert.equal(unknownApiResponse.status, 404)
@@ -194,7 +320,26 @@ describe('Activity API', () => {
       totalRecords: 1,
       totalPages: 1,
     })
+    assert.equal(lastAccountId, authenticatedAccount.id)
     activities = []
+  })
+
+  it('filters activity rows and counts by the authenticated account', async () => {
+    activities = [createActivityRecord(1), createActivityRecord(2)]
+    activityOwners.set(2, authenticatedAccount.id + 1)
+
+    const response = await fetch(`${baseUrl}/api/activities`)
+    const body = (await response.json()) as ActivityPage
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(
+      body.activities.map((activity) => activity.id),
+      [1],
+    )
+    assert.equal(body.totalRecords, 1)
+    assert.equal(lastAccountId, authenticatedAccount.id)
+    activities = []
+    activityOwners.delete(2)
   })
 
   it('returns an empty list when there are no activities', async () => {
@@ -340,7 +485,26 @@ describe('Activity API', () => {
       'result_other',
       'start_date',
     ])
+    assert.equal(lastAccountId, authenticatedAccount.id)
     activities = []
+  })
+
+  it('does not export an activity owned by another account', async () => {
+    activities = [createActivityRecord(77)]
+    activityOwners.set(77, authenticatedAccount.id + 1)
+    const response = await fetch(`${baseUrl}/api/activities/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [77] }),
+    })
+
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), {
+      error: 'One or more selected activities could not be found.',
+    })
+    assert.equal(lastAccountId, authenticatedAccount.id)
+    activities = []
+    activityOwners.delete(77)
   })
 
   it('returns up to 10 selected activities in repository order', async () => {
@@ -437,6 +601,7 @@ describe('Activity API', () => {
         job_source: 'Online application',
         job_source_url: 'https://jobs.example.com/123',
         job_title: 'Developer',
+        account_id: 999,
         employer_zip: '00123',
         employer_phone: '(512) 555-0123',
         start_date: '',
@@ -447,6 +612,7 @@ describe('Activity API', () => {
 
     assert.equal(response.status, 201)
     assert.deepEqual(await response.json(), { id: 42 })
+    assert.equal(lastAccountId, authenticatedAccount.id)
     assert.equal(savedActivity?.job_source, 'Online application')
     assert.equal(savedActivity?.job_source_url, 'https://jobs.example.com/123')
     assert.equal(savedActivity?.job_title, 'Developer')
@@ -519,6 +685,7 @@ describe('Activity API', () => {
 
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { id: 42 })
+    assert.equal(lastAccountId, authenticatedAccount.id)
     assert.equal(savedActivity?.job_source_url, 'https://jobs.example.com/456')
     assert.equal(savedActivity?.job_title, 'Engineer')
     assert.equal(savedActivity?.employer_phone, '5125550199')
@@ -527,6 +694,22 @@ describe('Activity API', () => {
     assert.equal(savedActivity?.start_date, null)
     assert.equal(savedActivity?.notes, null)
     assert.equal(savedActivity?.application_filed, true)
+  })
+
+  it('does not update an activity owned by another account', async () => {
+    activityOwners.set(99, authenticatedAccount.id + 1)
+    const response = await fetch(`${baseUrl}/api/activities/99`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    assert.equal(response.status, 404)
+    assert.deepEqual(await response.json(), {
+      error: 'Activity was not found.',
+    })
+    assert.equal(lastAccountId, authenticatedAccount.id)
+    activityOwners.delete(99)
   })
 
   it('rejects invalid activity IDs and update data', async () => {
@@ -606,5 +789,4 @@ describe('Activity API', () => {
       error: 'The activity could not be saved. Please try again.',
     })
   })
-
 })

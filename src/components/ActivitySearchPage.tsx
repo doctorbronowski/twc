@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   type ActivityPageSize,
   activityPageSizes,
+  fetchActivityApi,
   isActivityListResponse,
 } from '../activityApi.ts'
 import ActivityDetailsDialog, {
@@ -46,7 +47,7 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
       }
 
       try {
-        const response = await fetch(
+        const response = await fetchActivityApi(
           `/api/activities?page=${currentPage}&pageSize=${pageSize}`,
           { signal: controller.signal },
         )
@@ -98,7 +99,7 @@ function ActivitySearchPage({ onEditSuccess }: ActivitySearchPageProps) {
     id: number,
     values: ActivityFormValues,
   ): Promise<void> {
-    const response = await fetch(`/api/activities/${id}`, {
+    const response = await fetchActivityApi(`/api/activities/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(values),
