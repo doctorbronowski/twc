@@ -260,6 +260,7 @@ function SearchPage(props: ProtectedPageProps) {
       onDismissNotice={() => setNotice(null)}
     >
       <ActivitySearchPage
+        onNoticeChange={setNotice}
         onEditSuccess={() =>
           setNotice({
             type: 'success',

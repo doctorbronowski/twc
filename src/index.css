@@ -1056,6 +1056,27 @@ a {
   cursor: pointer;
 }
 
+.delete-activity-button {
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0.4rem;
+  color: #a12c27;
+  background: transparent;
+  cursor: pointer;
+}
+
+.delete-activity-button:hover:not(:disabled) {
+  background: #fff2f1;
+}
+
+.delete-activity-button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .activity-dialog {
   width: min(42rem, calc(100vw - 2rem));
   max-width: calc(100vw - 2rem);
@@ -1139,6 +1160,10 @@ a {
   display: flex;
   justify-content: flex-end;
   border-top: 1px solid #e1e6ee;
+}
+
+.delete-confirmation-actions {
+  gap: 0.75rem;
 }
 
 .placeholder-panel {

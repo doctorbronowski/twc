@@ -213,7 +213,7 @@ try {
     `CREATE USER IF NOT EXISTS 'twc_app'@'127.0.0.1' IDENTIFIED BY ${connection.escape(runtimePassword)}`,
   )
   await connection.query(
-    "GRANT SELECT, INSERT, UPDATE ON `twc`.`work_search_activities` TO 'twc_app'@'127.0.0.1'",
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON `twc`.`work_search_activities` TO 'twc_app'@'127.0.0.1'",
   )
   await connection.query(
     "GRANT SELECT, INSERT, UPDATE ON `twc`.`account` TO 'twc_app'@'127.0.0.1'",

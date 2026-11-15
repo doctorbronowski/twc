@@ -62,6 +62,7 @@ describe('Activity API', () => {
   let listFailure = false
   let exportFailure = false
   let updateFailure = false
+  let deleteFailure = false
   let lastAccountId: number | undefined
   const activityOwners = new Map<number, number>()
 
@@ -147,6 +148,24 @@ describe('Activity API', () => {
         return false
       }
       savedActivity = activity
+      return true
+    },
+    async deleteActivity(accountId, id) {
+      if (deleteFailure) {
+        throw new Error(
+          'Database connection details must not reach the response.',
+        )
+      }
+      lastAccountId = accountId
+      const index = activities.findIndex(
+        (activity) =>
+          activity.id === id &&
+          (activityOwners.get(id) ?? authenticatedAccount.id) === accountId,
+      )
+      if (index === -1) {
+        return false
+      }
+      activities.splice(index, 1)
       return true
     },
     async listActivities(accountId, page, pageSize): Promise<ActivityPage> {
@@ -247,6 +266,7 @@ describe('Activity API', () => {
       ['/api/activities/export', 'POST'],
       ['/api/activities', 'POST'],
       ['/api/activities/42', 'PUT'],
+      ['/api/activities/42', 'DELETE'],
     ]) {
       const protectedResponse = await globalThis.fetch(`${baseUrl}${url}`, {
         method,
@@ -269,6 +289,17 @@ describe('Activity API', () => {
     assert.deepEqual(await response.json(), {
       error: 'Request origin is not allowed.',
     })
+    const deleteResponse = await globalThis.fetch(
+      `${baseUrl}/api/activities/42`,
+      {
+        method: 'DELETE',
+        headers: {
+          Cookie: `${sessionCookieName}=${sessionToken}`,
+          Origin: 'https://untrusted.example',
+        },
+      },
+    )
+    assert.equal(deleteResponse.status, 403)
   })
 
   it('serves the React app on direct page loads without treating API paths as pages', async () => {
@@ -760,6 +791,59 @@ describe('Activity API', () => {
     assert.deepEqual(await response.json(), {
       error: 'The activity could not be updated. Please try again.',
     })
+  })
+
+  it('deletes only an activity owned by the authenticated account', async () => {
+    activities = [createActivityRecord(41), createActivityRecord(42)]
+    activityOwners.set(41, authenticatedAccount.id + 1)
+    const otherAccount = await fetch(`${baseUrl}/api/activities/41`, {
+      method: 'DELETE',
+    })
+    assert.equal(otherAccount.status, 404)
+    assert.equal(activities.length, 2)
+
+    const response = await fetch(`${baseUrl}/api/activities/42`, {
+      method: 'DELETE',
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { id: 42 })
+    assert.equal(lastAccountId, authenticatedAccount.id)
+    assert.deepEqual(
+      activities.map((activity) => activity.id),
+      [41],
+    )
+    assert.equal(
+      (await fetch(`${baseUrl}/api/activities/42`, { method: 'DELETE' }))
+        .status,
+      404,
+    )
+    activityOwners.delete(41)
+  })
+
+  it('rejects invalid IDs when deleting activities', async () => {
+    for (const id of ['0', 'abc', '9007199254740992']) {
+      const response = await fetch(`${baseUrl}/api/activities/${id}`, {
+        method: 'DELETE',
+      })
+      assert.equal(response.status, 400)
+      assert.deepEqual(await response.json(), {
+        error: 'Activity ID is invalid.',
+      })
+    }
+  })
+
+  it('returns a generic error without deleting the row if deletion fails', async () => {
+    activities = [createActivityRecord(42)]
+    deleteFailure = true
+    const response = await fetch(`${baseUrl}/api/activities/42`, {
+      method: 'DELETE',
+    })
+    deleteFailure = false
+    assert.equal(response.status, 500)
+    assert.deepEqual(await response.json(), {
+      error: 'The activity could not be deleted. Please try again.',
+    })
+    assert.equal(activities.length, 1)
   })
 
   it('returns a client error for invalid JSON', async () => {

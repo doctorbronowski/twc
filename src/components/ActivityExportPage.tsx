@@ -43,7 +43,9 @@ function ActivityExportPage() {
     storedSelection.unavailable,
   )
   const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState<ActivityPageSize>(5)
+  const [pageSize, setPageSize] = useState<ActivityPageSize>(
+    activityPageSizes[0],
+  )
   const [totalRecords, setTotalRecords] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
 
