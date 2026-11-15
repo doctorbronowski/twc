@@ -13,6 +13,7 @@ export interface ActivityRepository {
     id: number,
     activity: ActivityInput,
   ): Promise<boolean>
+  deleteActivity(accountId: number, id: number): Promise<boolean>
   listActivities(
     accountId: number,
     page: number,
@@ -205,6 +206,14 @@ export class MySqlActivityRepository implements ActivityRepository {
       [id, accountId],
     )
     return rows.length > 0
+  }
+
+  async deleteActivity(accountId: number, id: number): Promise<boolean> {
+    const [result] = await this.pool.execute<ResultSetHeader>(
+      'DELETE FROM work_search_activities WHERE id = ? AND account_id = ?',
+      [id, accountId],
+    )
+    return result.affectedRows > 0
   }
 
   async listActivities(

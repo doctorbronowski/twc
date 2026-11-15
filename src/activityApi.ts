@@ -1,6 +1,6 @@
 import type { SearchActivity } from './components/ActivityDetailsDialog.tsx'
 
-export const activityPageSizes = [5, 10, 25, 50, 100] as const
+export const activityPageSizes = [10, 25, 50, 100] as const
 export type ActivityPageSize = (typeof activityPageSizes)[number]
 
 export interface ActivityListResponse {

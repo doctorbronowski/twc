@@ -108,6 +108,9 @@ describe('Authentication API', () => {
     async updateActivity(_accountId, _id) {
       return true
     },
+    async deleteActivity() {
+      return true
+    },
     async listActivities(_accountId, page, pageSize) {
       return {
         activities: [],

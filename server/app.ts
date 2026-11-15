@@ -38,6 +38,14 @@ function parsePageSize(value: unknown): number | null {
   return activityPageSizes.has(pageSize) ? pageSize : null
 }
 
+function parseActivityId(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
+    return null
+  }
+  const id = Number(value)
+  return Number.isSafeInteger(id) ? id : null
+}
+
 function parseActivityIds(value: unknown): number[] | null {
   if (
     typeof value !== 'object' ||
@@ -241,14 +249,8 @@ export function createApp(repository: ActivityRepository, options: AppOptions) {
       if (accountId === null) {
         return
       }
-      const idValue = request.params.id
-      if (typeof idValue !== 'string' || !/^[1-9]\d*$/.test(idValue)) {
-        response.status(400).json({ error: 'Activity ID is invalid.' })
-        return
-      }
-
-      const id = Number(idValue)
-      if (!Number.isSafeInteger(id)) {
+      const id = parseActivityId(request.params.id)
+      if (id === null) {
         response.status(400).json({ error: 'Activity ID is invalid.' })
         return
       }
@@ -278,6 +280,39 @@ export function createApp(repository: ActivityRepository, options: AppOptions) {
         )
         response.status(500).json({
           error: 'The activity could not be updated. Please try again.',
+        })
+      }
+    },
+  )
+
+  app.delete(
+    '/api/activities/:id',
+    requireTrustedActivityOrigin,
+    async (request, response) => {
+      const accountId = getAuthenticatedAccountId(request, response)
+      if (accountId === null) {
+        return
+      }
+      const id = parseActivityId(request.params.id)
+      if (id === null) {
+        response.status(400).json({ error: 'Activity ID is invalid.' })
+        return
+      }
+
+      try {
+        const deleted = await repository.deleteActivity(accountId, id)
+        if (!deleted) {
+          response.status(404).json({ error: 'Activity was not found.' })
+          return
+        }
+        response.json({ id })
+      } catch (error) {
+        console.error(
+          'Unable to delete activity:',
+          error instanceof Error ? error.message : 'Unknown database error',
+        )
+        response.status(500).json({
+          error: 'The activity could not be deleted. Please try again.',
         })
       }
     },

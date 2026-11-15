@@ -29,15 +29,27 @@ for the initial owner's email and a hidden password, assigns unowned activities
 to that account, and finalizes the ownership constraint. Run the app only after
 both commands succeed. Start it with `pnpm dev`.
 
-The frontend is available directly at <http://127.0.0.1:5174> and through
-Apache at <http://twc.local.com>. The API listens on `127.0.0.1:3002`; Vite
+Vite serves the frontend at <https://127.0.0.1:5174> using the locally trusted
+certificate `~/.certs/twc.pem` and private key `~/.certs/twc-key.pem`. Create
+and trust a certificate for this address (for example with `mkcert`) before
+starting Vite. Keep the private key out of source control.
+Set `APP_BASE_URL=https://127.0.0.1:5174` in `.env.local` so authentication
+origin checks and email links use HTTPS.
+
+The API listens on `127.0.0.1:3002`; Vite
 proxies `/api` requests to Express. `GET /api/health` checks API availability.
 All `/api/activities` endpoints require an authenticated session and operate
 only on the signed-in account's records. `GET /api/activities?page=1&pageSize=5`
 lists activities and returns pagination metadata. Page sizes of 5, 10, 25, 50,
 and 100 are supported; the default is 5. `GET /api/activities` defaults to page
 1 and page size 5. `POST /api/activities` creates an activity;
-`PUT /api/activities/:id` updates an existing activity. Database setup creates
+`PUT /api/activities/:id` updates an existing activity, and
+`DELETE /api/activities/:id` deletes an owned activity. Existing
+local database installations need the updated activity-table `DELETE` grant;
+after a backup, rerun `pnpm db:setup` with admin credentials, or apply that
+grant separately. Grant the equivalent privilege to the production runtime
+database user before deploying this feature.
+Database setup creates
 the `twc` schema and a `twc_app` account with narrowly scoped access to
 activity and account tables.
 The owner bootstrap does not overwrite an existing account's password or
@@ -53,8 +65,11 @@ bootstrap and authenticated, owner-scoped activity API are ready.
 The UI provides sign-in, session-expiration reauthentication, account creation,
 email verification, and password recovery/reset flows.
 
-Apache must be running to use the `twc.local.com` address. In this environment
-it is started manually; if it is stopped, run
+The local Apache configuration serves <https://twc.local.com> without a port
+and proxies to Vite over HTTPS. To use it, set
+`APP_BASE_URL=https://twc.local.com` in `.env.local`; the corresponding Vite
+origin can be retained in `APP_ALLOWED_ORIGINS` for direct access. Apache is
+started manually in this environment; if it is stopped, run
 `sudo /opt/local/sbin/apachectl start`.
 
 ## Production Node.js startup
@@ -82,10 +97,12 @@ this Node app; leave out any legacy PHP rewrite rules.
 - `/enter` — responsive work-search activity form with calendar date inputs,
   Job Source URL, state selection, phone mask, Clear, and Submit actions.
 - `/search` — responsive, paginated list of all activities with selectable
-  page sizes (5, 10, 25, 50, or 100), a read-only details modal, and an edit
-  modal for each record, including Job Source URL.
-- `/export` — paginated activity selection with cross-page checkboxes, a
-  10-activity selection limit, selected-record removal, and a print preview.
+  page sizes (10, 25, 50, or 100; default 10), a read-only details modal, and an edit
+  modal for each record, including Job Source URL, and a delete action with
+  confirmation.
+- `/export` — paginated activity selection with the same page sizes and default,
+  cross-page checkboxes, a 10-activity selection limit, selected-record removal,
+  and a print preview.
 - `/export/print` — full details for selected records with browser print and
   Save as PDF instructions; each activity starts on a separate printed page.
 
