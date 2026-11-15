@@ -11,6 +11,20 @@ export interface ActivityListResponse {
   totalPages: number
 }
 
+export async function fetchActivityApi(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await fetch(input, {
+    ...init,
+    credentials: init?.credentials ?? 'same-origin',
+  })
+  if (response.status === 401) {
+    window.dispatchEvent(new Event('twc:session-expired'))
+  }
+  return response
+}
+
 const nullableStringFields = [
   'activity_date',
   'job_source',

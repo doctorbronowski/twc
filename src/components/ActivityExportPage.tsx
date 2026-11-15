@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   type ActivityPageSize,
   activityPageSizes,
+  fetchActivityApi,
   isActivityListResponse,
   isExportResponse,
 } from '../activityApi.ts'
@@ -54,7 +55,7 @@ function ActivityExportPage() {
       setHasLoadError(false)
 
       try {
-        const response = await fetch(
+        const response = await fetchActivityApi(
           `/api/activities?page=${currentPage}&pageSize=${pageSize}`,
           { signal: controller.signal },
         )
@@ -133,7 +134,7 @@ function ActivityExportPage() {
     setIsExporting(true)
     try {
       const ids = selectedActivities.map((activity) => activity.id)
-      const response = await fetch('/api/activities/export', {
+      const response = await fetchActivityApi('/api/activities/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids }),

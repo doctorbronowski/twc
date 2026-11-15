@@ -7,10 +7,21 @@ export interface ActivityRecord extends ActivityInput {
 }
 
 export interface ActivityRepository {
-  createActivity(activity: ActivityInput): Promise<number>
-  updateActivity(id: number, activity: ActivityInput): Promise<boolean>
-  listActivities(page: number, pageSize: number): Promise<ActivityPage>
-  getActivitiesByIds(ids: number[]): Promise<ActivityRecord[]>
+  createActivity(accountId: number, activity: ActivityInput): Promise<number>
+  updateActivity(
+    accountId: number,
+    id: number,
+    activity: ActivityInput,
+  ): Promise<boolean>
+  listActivities(
+    accountId: number,
+    page: number,
+    pageSize: number,
+  ): Promise<ActivityPage>
+  getActivitiesByIds(
+    accountId: number,
+    ids: number[],
+  ): Promise<ActivityRecord[]>
 }
 
 export interface ActivityPage {
@@ -47,6 +58,10 @@ interface ActivityCountRow extends RowDataPacket {
   totalRecords: number
 }
 
+interface ActivityIdRow extends RowDataPacket {
+  id: number
+}
+
 function mapActivityRow(row: ActivityRow): ActivityRecord {
   return {
     id: row.id,
@@ -78,9 +93,13 @@ export class MySqlActivityRepository implements ActivityRepository {
     this.pool = pool
   }
 
-  async createActivity(activity: ActivityInput): Promise<number> {
+  async createActivity(
+    accountId: number,
+    activity: ActivityInput,
+  ): Promise<number> {
     const [result] = await this.pool.execute<ResultSetHeader>(
       `INSERT INTO work_search_activities (
+        account_id,
         activity_date,
         job_source,
         job_source_url,
@@ -99,8 +118,9 @@ export class MySqlActivityRepository implements ActivityRepository {
         application_filed,
         result_other,
         notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        accountId,
         activity.activity_date,
         activity.job_source,
         activity.job_source_url,
@@ -125,7 +145,11 @@ export class MySqlActivityRepository implements ActivityRepository {
     return result.insertId
   }
 
-  async updateActivity(id: number, activity: ActivityInput): Promise<boolean> {
+  async updateActivity(
+    accountId: number,
+    id: number,
+    activity: ActivityInput,
+  ): Promise<boolean> {
     const [result] = await this.pool.execute<ResultSetHeader>(
       `UPDATE work_search_activities SET
         activity_date = ?,
@@ -147,7 +171,7 @@ export class MySqlActivityRepository implements ActivityRepository {
         result_other = ?,
         notes = ?,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?`,
+      WHERE id = ? AND account_id = ?`,
       [
         activity.activity_date,
         activity.job_source,
@@ -168,6 +192,7 @@ export class MySqlActivityRepository implements ActivityRepository {
         activity.result_other,
         activity.notes,
         id,
+        accountId,
       ],
     )
 
@@ -175,16 +200,23 @@ export class MySqlActivityRepository implements ActivityRepository {
       return true
     }
 
-    const [rows] = await this.pool.execute<ActivityRow[]>(
-      'SELECT id FROM work_search_activities WHERE id = ? LIMIT 1',
-      [id],
+    const [rows] = await this.pool.execute<ActivityIdRow[]>(
+      'SELECT id FROM work_search_activities WHERE id = ? AND account_id = ? LIMIT 1',
+      [id, accountId],
     )
     return rows.length > 0
   }
 
-  async listActivities(page: number, pageSize: number): Promise<ActivityPage> {
+  async listActivities(
+    accountId: number,
+    page: number,
+    pageSize: number,
+  ): Promise<ActivityPage> {
     const [countRows] = await this.pool.execute<ActivityCountRow[]>(
-      'SELECT COUNT(*) AS totalRecords FROM work_search_activities',
+      `SELECT COUNT(*) AS totalRecords
+        FROM work_search_activities
+        WHERE account_id = ?`,
+      [accountId],
     )
     const totalRecords = countRows[0].totalRecords
     const totalPages = Math.ceil(totalRecords / pageSize)
@@ -212,9 +244,10 @@ export class MySqlActivityRepository implements ActivityRepository {
         result_other,
         notes
       FROM work_search_activities
+      WHERE account_id = ?
       ORDER BY activity_date DESC, employer_name ASC, job_title ASC, id DESC
       LIMIT ? OFFSET ?`,
-      [pageSize, offset],
+      [accountId, pageSize, offset],
     )
 
     return {
@@ -226,7 +259,10 @@ export class MySqlActivityRepository implements ActivityRepository {
     }
   }
 
-  async getActivitiesByIds(ids: number[]): Promise<ActivityRecord[]> {
+  async getActivitiesByIds(
+    accountId: number,
+    ids: number[],
+  ): Promise<ActivityRecord[]> {
     if (ids.length === 0) {
       return []
     }
@@ -254,9 +290,9 @@ export class MySqlActivityRepository implements ActivityRepository {
         result_other,
         notes
       FROM work_search_activities
-      WHERE id IN (${placeholders})
+      WHERE account_id = ? AND id IN (${placeholders})
       ORDER BY activity_date DESC, employer_name ASC, job_title ASC, id DESC`,
-      ids,
+      [accountId, ...ids],
     )
 
     return rows.map(mapActivityRow)

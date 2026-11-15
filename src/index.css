@@ -112,14 +112,6 @@ a {
   gap: 0.6rem;
 }
 
-.signed-in-name {
-  max-width: 10rem;
-  overflow: hidden;
-  color: #647087;
-  font-size: 0.82rem;
-  text-overflow: ellipsis;
-}
-
 .sign-out-button {
   padding: 0.5rem 0.7rem;
   border: 1px solid #cbd3df;
@@ -142,6 +134,7 @@ a {
 }
 
 .auth-shell {
+  position: relative;
   min-height: 100vh;
   padding: 1.5rem;
   display: grid;
@@ -149,6 +142,12 @@ a {
   background:
     radial-gradient(ellipse at 90% 5%, rgb(101 142 218 / 20%), transparent 35%),
     #f4f6f9;
+}
+
+.auth-page-header {
+  position: absolute;
+  top: 1.25rem;
+  left: max(1.5rem, calc((100% - 72rem) / 2));
 }
 
 .auth-card {
@@ -212,6 +211,124 @@ a {
   text-align: center;
 }
 
+.session-expired-overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  padding: 1.5rem;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  background: rgb(244 246 249 / 97%);
+}
+
+.auth-links {
+  margin-top: 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.auth-link-button {
+  padding: 0;
+  border: 0;
+  color: #244b94;
+  background: transparent;
+  font-weight: 650;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.auth-link-button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.auth-dialog {
+  width: min(100% - 2rem, 34rem);
+  max-width: 34rem;
+  max-height: min(90vh, 48rem);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid #d5dce7;
+  border-radius: 0.9rem;
+  color: #172033;
+  background: #fff;
+  box-shadow: 0 1.5rem 4rem rgb(15 27 48 / 25%);
+}
+
+.auth-dialog::backdrop {
+  background: rgb(16 28 48 / 58%);
+  backdrop-filter: blur(2px);
+}
+
+.auth-dialog-content {
+  padding: 1.35rem 1.5rem 1.5rem;
+}
+
+.auth-dialog-header {
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.auth-dialog-header h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 1.3rem;
+}
+
+.auth-dialog-close {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 0.4rem;
+  color: #526078;
+  background: #f0f3f8;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.auth-dialog-body .auth-description:first-child {
+  margin-top: 0;
+}
+
+.auth-result {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.auth-result .auth-description {
+  margin: 0;
+}
+
+.auth-success {
+  margin: 0;
+  color: #145a32;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.auth-resend {
+  margin-top: 1rem;
+  display: grid;
+  justify-items: start;
+  gap: 0.75rem;
+}
+
+.auth-card .auth-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .content-shell {
   width: min(100% - 3rem, 72rem);
   margin: 0 auto;
@@ -264,6 +381,81 @@ a {
   margin: 0;
   color: #18243a;
   font-size: clamp(1.35rem, 3vw, 1.75rem);
+}
+
+.account-details-card {
+  max-width: 42rem;
+  margin: 1.25rem 0 0;
+  padding: 1.35rem;
+  display: grid;
+  gap: 1.15rem;
+  border: 1px solid #e1e6ee;
+  border-radius: 0.85rem;
+  background: #fff;
+  box-shadow: 0 0.5rem 1.25rem rgb(28 49 83 / 5%);
+}
+
+.account-details-card dt {
+  color: #5e6a80;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.account-details-card dd {
+  margin: 0.3rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.account-form-card,
+.account-email-change-pending {
+  max-width: 42rem;
+  margin-top: 1.25rem;
+  padding: 1.35rem;
+  border: 1px solid #e1e6ee;
+  border-radius: 0.85rem;
+  background: #fff;
+  box-shadow: 0 0.5rem 1.25rem rgb(28 49 83 / 5%);
+}
+
+.account-email-change-pending > p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.account-action-buttons {
+  margin-top: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.account-deactivation-warning {
+  max-width: 42rem;
+  margin: 0.75rem 0 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid #e6b4b1;
+  border-radius: 0.6rem;
+  color: #842d2a;
+  background: #fff2f1;
+  line-height: 1.5;
+}
+
+.account-deactivation-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  color: #34425a;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.account-deactivation-confirm input {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  margin: 0.15rem 0 0;
+  accent-color: #842d2a;
 }
 
 .quick-links {
@@ -499,6 +691,42 @@ a {
   accent-color: #244b94;
 }
 
+.password-input-control {
+  position: relative;
+  display: block;
+}
+
+.form-field .password-input-control input {
+  padding-right: 3.1rem;
+}
+
+.password-visibility-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.45rem;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 0.4rem;
+  color: #59667d;
+  background: transparent;
+  cursor: pointer;
+}
+
+.password-visibility-toggle:hover {
+  color: #244b94;
+  background: #f0f3f8;
+}
+
+.password-visibility-toggle svg {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
 .checkbox-field {
   justify-content: flex-end;
   padding-bottom: 0.65rem;
@@ -554,6 +782,15 @@ a {
 .button-secondary:hover:not(:disabled) {
   border-color: #9eacc1;
   background: #f7f9fc;
+}
+
+.button-danger {
+  color: #fff;
+  background: #842d2a;
+}
+
+.button-danger:hover:not(:disabled) {
+  background: #6f2421;
 }
 
 .notice-banner {
@@ -1126,6 +1363,11 @@ textarea:focus-visible {
 
   .auth-card {
     padding: 1.5rem;
+  }
+
+  .auth-page-header {
+    top: 1rem;
+    left: 1rem;
   }
 }
 
