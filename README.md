@@ -95,11 +95,13 @@ this Node app; leave out any legacy PHP rewrite rules.
 
 - `/` — welcome dashboard with links to Enter and Search.
 - `/enter` — responsive work-search activity form with calendar date inputs,
-  Job Source URL, state selection, phone mask, Clear, and Submit actions.
+  Job Source selection (LinkedIn, Indeed, or Other), a Job Source URL field
+  for Other, state selection, phone mask, Clear, and Submit actions.
 - `/search` — responsive, paginated list of all activities with selectable
   page sizes (10, 25, 50, or 100; default 10), a read-only details modal, and an edit
-  modal for each record, including Job Source URL, and a delete action with
-  confirmation.
+  modal for each record with the same Job Source controls, and a delete action
+  with confirmation. Existing unrecognized Job Source values are shown as
+  Other when editing; saving LinkedIn or Indeed clears the Job Source URL.
 - `/export` — paginated activity selection with the same page sizes and default,
   cross-page checkboxes, a 10-activity selection limit, selected-record removal,
   and a print preview.

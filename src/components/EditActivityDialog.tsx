@@ -67,8 +67,10 @@ function EditActivityDialog({
     try {
       await onSave(selectedActivity.id, values)
       dialogRef.current?.close()
+      return true
     } catch {
       setErrorMessage('The activity could not be updated. Please try again.')
+      return false
     } finally {
       setIsSubmitting(false)
     }

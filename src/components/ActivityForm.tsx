@@ -29,7 +29,7 @@ interface ActivityFormProps {
   initialValue?: ActivityFormValues
   isModal?: boolean
   submitLabel?: string
-  onSubmit: (activity: ActivityFormValues) => Promise<void>
+  onSubmit: (activity: ActivityFormValues) => Promise<boolean>
 }
 
 type TextFieldName = Exclude<keyof ActivityFormValues, 'application_filed'>
@@ -127,6 +127,19 @@ export function formatPhone(value: string): string {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
 }
 
+function normalizeJobSource(value: string): string {
+  switch (value.trim().toLowerCase()) {
+    case '':
+      return ''
+    case 'linkedin':
+      return 'LinkedIn'
+    case 'indeed':
+      return 'Indeed'
+    default:
+      return 'Other'
+  }
+}
+
 function ActivityForm({
   isSubmitting,
   onClear,
@@ -137,7 +150,10 @@ function ActivityForm({
   submitLabel = 'Submit',
   onSubmit,
 }: ActivityFormProps) {
-  const [activity, setActivity] = useState(() => ({ ...initialValue }))
+  const [activity, setActivity] = useState(() => ({
+    ...initialValue,
+    job_source: normalizeJobSource(initialValue.job_source),
+  }))
 
   function updateField<K extends TextFieldName>(
     field: K,
@@ -153,7 +169,20 @@ function ActivityForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    await onSubmit(activity)
+    const clearJobSourceUrl =
+      activity.job_source === 'LinkedIn' || activity.job_source === 'Indeed'
+    const saved = await onSubmit({
+      ...activity,
+      job_source_url: clearJobSourceUrl ? '' : activity.job_source_url,
+    })
+    if (saved && clearJobSourceUrl) {
+      setActivity((currentActivity) =>
+        currentActivity.job_source === activity.job_source &&
+        currentActivity.job_source_url === activity.job_source_url
+          ? { ...currentActivity, job_source_url: '' }
+          : currentActivity,
+      )
+    }
   }
 
   return (
@@ -183,28 +212,34 @@ function ActivityForm({
           </div>
           <div className="form-field">
             <label htmlFor="job-source">Job Source</label>
-            <input
+            <select
               id="job-source"
               name="job_source"
-              type="text"
               value={activity.job_source}
               onChange={(event) =>
                 updateField('job_source', event.target.value)
               }
-            />
+            >
+              <option value="">Select a job source</option>
+              <option value="LinkedIn">LinkedIn</option>
+              <option value="Indeed">Indeed</option>
+              <option value="Other">Other</option>
+            </select>
           </div>
-          <div className="form-field">
-            <label htmlFor="job-source-url">Job Source URL</label>
-            <input
-              id="job-source-url"
-              name="job_source_url"
-              type="text"
-              value={activity.job_source_url}
-              onChange={(event) =>
-                updateField('job_source_url', event.target.value)
-              }
-            />
-          </div>
+          {activity.job_source === 'Other' && (
+            <div className="form-field">
+              <label htmlFor="job-source-url">Job Source URL</label>
+              <input
+                id="job-source-url"
+                name="job_source_url"
+                type="text"
+                value={activity.job_source_url}
+                onChange={(event) =>
+                  updateField('job_source_url', event.target.value)
+                }
+              />
+            </div>
+          )}
           <div className="form-field">
             <label htmlFor="job-title">Job Title</label>
             <input

@@ -199,18 +199,20 @@ function EnterPage(props: ProtectedPageProps) {
           type: 'error',
           message: 'We couldn’t save the activity. Please try again.',
         })
-        return
+        return false
       }
 
       setNotice({
         type: 'success',
         message: 'Activity saved successfully.',
       })
+      return true
     } catch {
       setNotice({
         type: 'error',
         message: 'We couldn’t save the activity. Please try again.',
       })
+      return false
     } finally {
       setIsSubmitting(false)
     }
