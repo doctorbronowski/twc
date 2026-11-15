@@ -192,6 +192,10 @@ export function createAuthRouter(
         response.status(401).json({ error: error.message })
         return
       }
+      if (error instanceof AuthError && error.code === 'active-session') {
+        response.status(409).json({ error: error.message })
+        return
+      }
       writeUnexpectedError('sign in', error, response)
     }
   })

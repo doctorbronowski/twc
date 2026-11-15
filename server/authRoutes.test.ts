@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
-import { after, before, describe, it } from 'node:test'
+import { after, before, beforeEach, describe, it } from 'node:test'
 import type { ActivityRepository } from './activityRepository.ts'
 import { createApp } from './app.ts'
 import type { AuthAccount, AuthRepository } from './auth.ts'
@@ -73,12 +73,33 @@ describe('Authentication API', () => {
     async completeEmailChange() {
       return { status: 'invalid-token' }
     },
-    async createSession(accountId, tokenHash) {
+    async createSession(expectedAccount, tokenHash, existingSessionTokenHash) {
+      if (
+        account.disabledAt !== null ||
+        account.username !== expectedAccount.username ||
+        account.passwordHash !== expectedAccount.passwordHash
+      ) {
+        return 'account-changed'
+      }
+      const currentHash = existingSessionTokenHash?.toString('hex')
+      for (const [hash, session] of sessions) {
+        if (
+          session.accountId === account.id &&
+          session.expiresAt > Date.now() &&
+          hash !== currentHash
+        ) {
+          return 'active-session'
+        }
+      }
+      if (currentHash) {
+        sessions.delete(currentHash)
+      }
       sessions.set(tokenHash.toString('hex'), {
         sessionId: sessions.size + 1,
-        accountId,
+        accountId: account.id,
         expiresAt: Date.now() + 15 * 60 * 1000,
       })
+      return 'created'
     },
     async getAndTouchSession(tokenHash) {
       const session = sessions.get(tokenHash.toString('hex'))
@@ -150,6 +171,10 @@ describe('Authentication API', () => {
     await once(server, 'close')
   })
 
+  beforeEach(() => {
+    sessions.clear()
+  })
+
   it('rejects auth requests from untrusted or missing origins', async () => {
     for (const origin of [undefined, 'https://attacker.example']) {
       const headers = new Headers({ 'Content-Type': 'application/json' })
@@ -210,6 +235,39 @@ describe('Authentication API', () => {
     assert.equal(logout.status, 204)
     assert.match(logout.headers.get('set-cookie') ?? '', /Max-Age=0/)
     assert.equal(sessions.size, 0)
+  })
+
+  it('rejects a second sign-in and preserves the first session', async () => {
+    const request = () =>
+      fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: allowedOrigin,
+        },
+        body: JSON.stringify({
+          email: account.username,
+          password: 'SecurePassword123',
+        }),
+      })
+    const first = await request()
+    assert.equal(first.status, 200)
+    const cookie = first.headers.get('set-cookie')?.split(';')[0]
+    assert.ok(cookie)
+    const second = await request()
+    assert.equal(second.status, 409)
+    assert.deepEqual(await second.json(), {
+      error:
+        'This account is already signed in elsewhere. Sign out there or wait for the session to expire after 15 minutes of inactivity.',
+    })
+    assert.equal(second.headers.get('set-cookie'), null)
+    const session = await fetch(`${baseUrl}/api/auth/session`, {
+      headers: { Cookie: cookie },
+    })
+    assert.deepEqual(await session.json(), {
+      authenticated: true,
+      user: { id: account.id, username: account.username },
+    })
   })
 
   it('requires authentication and returns only safe account details', async () => {

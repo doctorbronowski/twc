@@ -35,6 +35,11 @@ export type EmailChangeCompletionResult =
   | { status: 'completed'; oldEmail: string; newEmail: string }
   | { status: 'invalid-token' | 'email-in-use' }
 
+export type CreateSessionResult =
+  | 'created'
+  | 'active-session'
+  | 'account-changed'
+
 export interface AuthenticatedSession extends AuthenticatedUser {
   sessionId: number
 }
@@ -91,7 +96,11 @@ export interface AuthRepository {
     tokenHash: Buffer,
     currentSessionTokenHash: Buffer | null,
   ): Promise<EmailChangeCompletionResult>
-  createSession(accountId: number, tokenHash: Buffer): Promise<void>
+  createSession(
+    account: AuthAccount,
+    tokenHash: Buffer,
+    existingSessionTokenHash: Buffer | null,
+  ): Promise<CreateSessionResult>
   getAndTouchSession(tokenHash: Buffer): Promise<AuthenticatedSession | null>
   revokeSession(tokenHash: Buffer): Promise<void>
 }
@@ -107,6 +116,7 @@ export type AuthErrorCode =
   | 'invalid-input'
   | 'duplicate-account'
   | 'invalid-credentials'
+  | 'active-session'
   | 'invalid-token'
   | 'email-delivery'
   | 'duplicate-email'
@@ -236,12 +246,26 @@ export class AuthenticationService {
       )
     }
 
-    if (existingSessionToken) {
-      await this.repository.revokeSession(hashToken(existingSessionToken))
-    }
-
     const sessionToken = randomBytes(32).toString('base64url')
-    await this.repository.createSession(account.id, hashToken(sessionToken))
+    const result = await this.repository.createSession(
+      account,
+      hashToken(sessionToken),
+      existingSessionToken && isToken(existingSessionToken)
+        ? hashToken(existingSessionToken)
+        : null,
+    )
+    if (result === 'active-session') {
+      throw new AuthError(
+        'active-session',
+        'This account is already signed in elsewhere. Sign out there or wait for the session to expire after 15 minutes of inactivity.',
+      )
+    }
+    if (result === 'account-changed') {
+      throw new AuthError(
+        'invalid-credentials',
+        'Email or password is incorrect.',
+      )
+    }
     return {
       user: { id: account.id, username: account.username },
       sessionToken,

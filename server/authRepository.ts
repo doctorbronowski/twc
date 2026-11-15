@@ -1,9 +1,10 @@
 import type { ResultSetHeader, RowDataPacket } from 'mysql2'
-import type { Pool } from 'mysql2/promise'
+import type { Pool, PoolConnection } from 'mysql2/promise'
 import type {
   AuthAccount,
   AuthenticatedSession,
   AuthRepository,
+  CreateSessionResult,
   EmailChangeCompletionResult,
   EmailChangeRequestResult,
 } from './auth.ts'
@@ -30,10 +31,9 @@ interface TokenRow extends RowDataPacket {
   account_id: number
 }
 
-interface SessionRow extends RowDataPacket {
-  sessionId: number
-  accountId: number
-  username: string
+interface ActiveSessionRow extends RowDataPacket {
+  id: number
+  token_hash: Buffer
 }
 
 function isDuplicateEntry(error: unknown): boolean {
@@ -655,19 +655,89 @@ export class MySqlAuthRepository implements AuthRepository {
     }
   }
 
-  async createSession(accountId: number, tokenHash: Buffer): Promise<void> {
+  private async getActiveSession(
+    connection: PoolConnection,
+    accountId: number,
+  ): Promise<ActiveSessionRow | null> {
+    const [sessions] = await connection.execute<ActiveSessionRow[]>(
+      `SELECT id, token_hash
+        FROM sessions
+        WHERE account_id = ? AND expires_at > CURRENT_TIMESTAMP(3)
+        ORDER BY id
+        FOR UPDATE`,
+      [accountId],
+    )
+    if (sessions.length > 1) {
+      await connection.execute(
+        'DELETE FROM sessions WHERE account_id = ? AND id <> ?',
+        [accountId, sessions[0].id],
+      )
+    }
+    return sessions[0] ?? null
+  }
+
+  async createSession(
+    expectedAccount: AuthAccount,
+    tokenHash: Buffer,
+    existingSessionTokenHash: Buffer | null,
+  ): Promise<CreateSessionResult> {
     await this.pool.execute(
       'DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP(3)',
     )
-    const [result] = await this.pool.execute<ResultSetHeader>(
-      `INSERT INTO sessions (account_id, token_hash, expires_at)
-        SELECT id, ?, DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 15 MINUTE)
-        FROM \`account\`
-        WHERE id = ? AND disabled_at IS NULL`,
-      [tokenHash, accountId],
-    )
-    if (result.affectedRows !== 1) {
-      throw new Error('Unable to create a session for an inactive account.')
+    const connection = await this.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      const [accounts] = await connection.execute<AccountRow[]>(
+        `SELECT id, username, pending_email, password_hash, email_verified_at,
+            disabled_at
+          FROM \`account\`
+          WHERE id = ?
+          FOR UPDATE`,
+        [expectedAccount.id],
+      )
+      const account = accounts[0]
+      if (
+        !account ||
+        account.disabled_at !== null ||
+        account.email_verified_at === null ||
+        account.username !== expectedAccount.username ||
+        account.password_hash !== expectedAccount.passwordHash
+      ) {
+        await connection.commit()
+        return 'account-changed'
+      }
+
+      const activeSession = await this.getActiveSession(connection, account.id)
+      if (
+        activeSession &&
+        (!existingSessionTokenHash ||
+          !activeSession.token_hash.equals(existingSessionTokenHash))
+      ) {
+        await connection.commit()
+        return 'active-session'
+      }
+
+      await connection.execute(
+        'DELETE FROM sessions WHERE account_id = ? AND expires_at <= CURRENT_TIMESTAMP(3)',
+        [account.id],
+      )
+      if (existingSessionTokenHash) {
+        await connection.execute('DELETE FROM sessions WHERE token_hash = ?', [
+          existingSessionTokenHash,
+        ])
+      }
+      await connection.execute(
+        `INSERT INTO sessions (account_id, token_hash, expires_at)
+          VALUES (?, ?, DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 15 MINUTE))`,
+        [account.id, tokenHash],
+      )
+      await connection.commit()
+      return 'created'
+    } catch (error) {
+      await connection.rollback()
+      throw error
+    } finally {
+      connection.release()
     }
   }
 
@@ -677,18 +747,31 @@ export class MySqlAuthRepository implements AuthRepository {
     const connection = await this.pool.getConnection()
     try {
       await connection.beginTransaction()
-      const [rows] = await connection.execute<SessionRow[]>(
-        `SELECT s.id AS sessionId, s.account_id AS accountId, a.username
-          FROM sessions AS s
-          INNER JOIN \`account\` AS a ON a.id = s.account_id
-          WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP(3)
-            AND a.disabled_at IS NULL
-          LIMIT 1
+      const [rows] = await connection.execute<
+        (RowDataPacket & { account_id: number })[]
+      >('SELECT account_id FROM sessions WHERE token_hash = ? LIMIT 1', [
+        tokenHash,
+      ])
+      if (!rows[0]) {
+        await connection.commit()
+        return null
+      }
+      const [accounts] = await connection.execute<AccountRow[]>(
+        `SELECT id, username, pending_email, password_hash, email_verified_at,
+            disabled_at
+          FROM \`account\`
+          WHERE id = ? AND disabled_at IS NULL
           FOR UPDATE`,
-        [tokenHash],
+        [rows[0].account_id],
       )
-      const session = rows[0]
-      if (!session) {
+      const account = accounts[0]
+      if (!account) {
+        await connection.commit()
+        return null
+      }
+
+      const session = await this.getActiveSession(connection, account.id)
+      if (!session?.token_hash.equals(tokenHash)) {
         await connection.commit()
         return null
       }
@@ -698,13 +781,13 @@ export class MySqlAuthRepository implements AuthRepository {
           SET last_activity_at = CURRENT_TIMESTAMP(3),
               expires_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 15 MINUTE)
           WHERE id = ?`,
-        [session.sessionId],
+        [session.id],
       )
       await connection.commit()
       return {
-        sessionId: session.sessionId,
-        id: session.accountId,
-        username: session.username,
+        sessionId: session.id,
+        id: account.id,
+        username: account.username,
       }
     } catch (error) {
       await connection.rollback()

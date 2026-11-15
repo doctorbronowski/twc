@@ -64,6 +64,12 @@ Public registration is disabled by default; enable it only after the owner
 bootstrap and authenticated, owner-scoped activity API are ready.
 The UI provides sign-in, session-expiration reauthentication, account creation,
 email verification, and password recovery/reset flows.
+Each account permits one active browser session. A sign-in from another
+browser is rejected until the existing session signs out or expires after
+15 minutes of inactivity. Tabs sharing a session cookie share that session;
+separate browsers on the same computer count as separate sessions. If older
+data contains multiple active sessions, only the oldest remains valid when
+that account next signs in or makes an authenticated request.
 
 The local Apache configuration serves <https://twc.local.com> without a port
 and proxies to Vite over HTTPS. To use it, set

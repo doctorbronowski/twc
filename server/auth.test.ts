@@ -8,6 +8,7 @@ import {
   AuthenticationService,
   type AuthMailer,
   type AuthRepository,
+  type CreateSessionResult,
 } from './auth.ts'
 
 interface StoredToken {
@@ -319,12 +320,65 @@ class MemoryAuthRepository implements AuthRepository {
     } as const
   }
 
-  async createSession(accountId: number, tokenHash: Buffer): Promise<void> {
+  seedSession(accountId: number, tokenHash: Buffer): void {
     this.sessions.set(hashKey(tokenHash), {
       sessionId: this.nextSessionId++,
       accountId,
       expiresAt: Date.now() + 15 * 60 * 1000,
     })
+  }
+
+  private getActiveSession(accountId: number): [string, StoredSession] | null {
+    const active = [...this.sessions.entries()]
+      .filter(
+        ([, session]) =>
+          session.accountId === accountId && session.expiresAt > Date.now(),
+      )
+      .sort((a, b) => a[1].sessionId - b[1].sessionId)
+    if (active.length > 1) {
+      for (const [hash, session] of this.sessions) {
+        if (
+          session.accountId === accountId &&
+          session.sessionId !== active[0][1].sessionId
+        ) {
+          this.sessions.delete(hash)
+        }
+      }
+    }
+    return active[0] ?? null
+  }
+
+  async createSession(
+    expected: AuthAccount,
+    tokenHash: Buffer,
+    existingSessionTokenHash: Buffer | null,
+  ): Promise<CreateSessionResult> {
+    const account = this.accounts.get(expected.id)
+    if (
+      !account ||
+      account.disabledAt !== null ||
+      account.emailVerifiedAt === null ||
+      account.username !== expected.username ||
+      account.passwordHash !== expected.passwordHash
+    ) {
+      return 'account-changed'
+    }
+    const active = this.getActiveSession(account.id)
+    const existingHash =
+      existingSessionTokenHash && hashKey(existingSessionTokenHash)
+    if (active && active[0] !== existingHash) {
+      return 'active-session'
+    }
+    for (const [hash, session] of this.sessions) {
+      if (session.accountId === account.id && session.expiresAt <= Date.now()) {
+        this.sessions.delete(hash)
+      }
+    }
+    if (existingHash) {
+      this.sessions.delete(existingHash)
+    }
+    this.seedSession(account.id, tokenHash)
+    return 'created'
   }
 
   async getAndTouchSession(
@@ -339,6 +393,9 @@ class MemoryAuthRepository implements AuthRepository {
       account.disabledAt !== null ||
       session.expiresAt <= Date.now()
     ) {
+      return null
+    }
+    if (this.getActiveSession(account.id)?.[0] !== hash) {
       return null
     }
     session.expiresAt = Date.now() + 15 * 60 * 1000
@@ -455,6 +512,138 @@ describe('authentication service', () => {
     assert.equal(repository.sessions.size, 1)
   })
 
+  it('rejects concurrent sign-ins without disturbing the existing session and allows sign-out or expiry', async () => {
+    const repository = new MemoryAuthRepository()
+    const service = new AuthenticationService(repository, new MemoryMailer())
+    await service.register('person@example.com', 'SecurePassword123')
+    const account = await repository.findAccountByUsername('person@example.com')
+    assert.ok(account)
+    account.emailVerifiedAt = new Date().toISOString()
+
+    const results = await Promise.allSettled([
+      service.login(account.username, 'SecurePassword123', null),
+      service.login(account.username, 'SecurePassword123', null),
+    ])
+    const successes = results.filter((result) => result.status === 'fulfilled')
+    const failures = results.filter((result) => result.status === 'rejected')
+    assert.equal(successes.length, 1)
+    assert.equal(failures.length, 1)
+    assert.ok(failures[0].reason instanceof AuthError)
+    assert.equal(failures[0].reason.code, 'active-session')
+    const first = successes[0].value
+    await assert.rejects(
+      service.login(account.username, 'IncorrectPassword123', null),
+      (error: unknown) =>
+        error instanceof AuthError && error.code === 'invalid-credentials',
+    )
+    assert.ok(await service.authenticate(first.sessionToken))
+
+    await service.logout(first.sessionToken)
+    const second = await service.login(
+      account.username,
+      'SecurePassword123',
+      null,
+    )
+    const stored = repository.sessions.get(
+      createHash('sha256').update(second.sessionToken).digest('hex'),
+    )
+    assert.ok(stored)
+    stored.expiresAt = Date.now() - 1
+    const third = await service.login(
+      account.username,
+      'SecurePassword123',
+      null,
+    )
+    assert.equal(await service.authenticate(second.sessionToken), null)
+    assert.ok(await service.authenticate(third.sessionToken))
+  })
+
+  it('preserves an existing browser session when switching to an already signed-in account is rejected', async () => {
+    const repository = new MemoryAuthRepository()
+    const service = new AuthenticationService(repository, new MemoryMailer())
+    await service.register('first@example.com', 'SecurePassword123')
+    await service.register('second@example.com', 'SecurePassword123')
+    for (const account of repository.accounts.values()) {
+      account.emailVerifiedAt = new Date().toISOString()
+    }
+    const first = await service.login(
+      'first@example.com',
+      'SecurePassword123',
+      null,
+    )
+    const second = await service.login(
+      'second@example.com',
+      'SecurePassword123',
+      null,
+    )
+
+    await assert.rejects(
+      service.login(
+        'second@example.com',
+        'SecurePassword123',
+        first.sessionToken,
+      ),
+      (error: unknown) =>
+        error instanceof AuthError && error.code === 'active-session',
+    )
+    assert.ok(await service.authenticate(first.sessionToken))
+    assert.ok(await service.authenticate(second.sessionToken))
+
+    await service.logout(second.sessionToken)
+    const switched = await service.login(
+      'second@example.com',
+      'SecurePassword123',
+      first.sessionToken,
+    )
+    assert.equal(await service.authenticate(first.sessionToken), null)
+    assert.ok(await service.authenticate(switched.sessionToken))
+  })
+
+  it('keeps only the oldest active legacy session', async () => {
+    const repository = new MemoryAuthRepository()
+    const service = new AuthenticationService(repository, new MemoryMailer())
+    await service.register('person@example.com', 'SecurePassword123')
+    const account = await repository.findAccountByUsername('person@example.com')
+    assert.ok(account)
+    account.emailVerifiedAt = new Date().toISOString()
+    const first = await service.login(
+      account.username,
+      'SecurePassword123',
+      null,
+    )
+    const duplicate = 'B'.repeat(43)
+    repository.seedSession(
+      account.id,
+      createHash('sha256').update(duplicate).digest(),
+    )
+
+    assert.equal(await service.authenticate(duplicate), null)
+    assert.ok(await service.authenticate(first.sessionToken))
+    assert.equal(repository.sessions.size, 1)
+  })
+
+  it('rejects session creation if account credentials or status changed', async () => {
+    const repository = new MemoryAuthRepository()
+    const service = new AuthenticationService(repository, new MemoryMailer())
+    await service.register('person@example.com', 'SecurePassword123')
+    const account = await repository.findAccountByUsername('person@example.com')
+    assert.ok(account)
+    account.emailVerifiedAt = new Date().toISOString()
+    const staleAccount = { ...account }
+    account.passwordHash = 'changed'
+    assert.equal(
+      await repository.createSession(staleAccount, Buffer.alloc(32), null),
+      'account-changed',
+    )
+    account.passwordHash = staleAccount.passwordHash
+    account.disabledAt = new Date().toISOString()
+    assert.equal(
+      await repository.createSession(staleAccount, Buffer.alloc(32), null),
+      'account-changed',
+    )
+    assert.equal(repository.sessions.size, 0)
+  })
+
   it('resets passwords once and revokes all existing sessions', async () => {
     const repository = new MemoryAuthRepository()
     const mailer = new MemoryMailer()
@@ -503,10 +692,10 @@ describe('authentication service', () => {
       'SecurePassword123',
       null,
     )
-    const otherSession = await service.login(
-      'person@example.com',
-      'SecurePassword123',
-      null,
+    const otherSessionToken = 'B'.repeat(43)
+    repository.seedSession(
+      account.id,
+      createHash('sha256').update(otherSessionToken).digest(),
     )
     await service.changePassword(
       account.id,
@@ -516,7 +705,7 @@ describe('authentication service', () => {
     )
 
     assert.ok(await service.authenticate(currentSession.sessionToken))
-    assert.equal(await service.authenticate(otherSession.sessionToken), null)
+    assert.equal(await service.authenticate(otherSessionToken), null)
     await assert.rejects(
       service.login('person@example.com', 'SecurePassword123', null),
       (error: unknown) =>
@@ -585,12 +774,7 @@ describe('authentication service', () => {
     assert.ok(account)
     account.emailVerifiedAt = new Date().toISOString()
 
-    const currentSession = await service.login(
-      'person@example.com',
-      'SecurePassword123',
-      null,
-    )
-    const otherSession = await service.login(
+    let currentSession = await service.login(
       'person@example.com',
       'SecurePassword123',
       null,
@@ -610,8 +794,15 @@ describe('authentication service', () => {
       (error: unknown) =>
         error instanceof AuthError && error.code === 'invalid-credentials',
     )
-    assert.ok(
-      await service.login('person@example.com', 'SecurePassword123', null),
+    currentSession = await service.login(
+      'person@example.com',
+      'SecurePassword123',
+      currentSession.sessionToken,
+    )
+    const otherSessionToken = 'B'.repeat(43)
+    repository.seedSession(
+      account.id,
+      createHash('sha256').update(otherSessionToken).digest(),
     )
 
     const result = await service.verifyEmailChange(
@@ -633,7 +824,7 @@ describe('authentication service', () => {
     )
     assert.equal(account.pendingEmail, null)
     assert.ok(await service.authenticate(currentSession.sessionToken))
-    assert.equal(await service.authenticate(otherSession.sessionToken), null)
+    assert.equal(await service.authenticate(otherSessionToken), null)
     assert.deepEqual(mailer.emailChangeNotifications, [
       { oldEmail: 'person@example.com', newEmail: pendingEmail },
     ])

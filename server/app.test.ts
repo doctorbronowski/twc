@@ -106,7 +106,9 @@ describe('Activity API', () => {
     async completeEmailChange() {
       return { status: 'invalid-token' }
     },
-    async createSession() {},
+    async createSession() {
+      return 'created'
+    },
     async getAndTouchSession(tokenHash) {
       if (
         !tokenHash.equals(sessionTokenHash) ||
