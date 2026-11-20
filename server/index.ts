@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   loadDemoActivityLimit,
@@ -11,6 +12,13 @@ import { configureDemoStart } from './demoStart.ts'
 import { SmtpEmailAdapter } from './email.ts'
 
 const isProduction = process.env.NODE_ENV === 'production'
+const releaseFile = fileURLToPath(new URL('../.twc-release', import.meta.url))
+const release = existsSync(releaseFile)
+  ? readFileSync(releaseFile, 'utf8').trim()
+  : undefined
+if (release !== undefined && !/^[0-9a-f]{40}$/.test(release)) {
+  throw new Error('Invalid application release identifier.')
+}
 const host = isProduction ? undefined : (process.env.API_HOST ?? '127.0.0.1')
 const portValue = isProduction
   ? (process.env.PORT ?? '3000')
@@ -40,6 +48,7 @@ const app = createApp(
     allowedOrigins: loadTrustedOrigins(),
     registrationEnabled: process.env.PUBLIC_REGISTRATION_ENABLED === 'true',
     demoStart: configureDemoStart(pool),
+    release,
     staticDirectory: isProduction
       ? fileURLToPath(new URL('../dist/', import.meta.url))
       : undefined,

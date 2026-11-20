@@ -81,6 +81,7 @@ function parseActivityIds(value: unknown): number[] | null {
 
 interface AppOptions {
   staticDirectory?: string
+  release?: string
   authService: AuthenticationService
   allowedOrigins?: ReadonlySet<string>
   registrationEnabled?: boolean
@@ -141,6 +142,10 @@ export function createApp(repository: ActivityRepository, options: AppOptions) {
 
   app.get('/api/health', (_request, response) => {
     response.json({ status: 'ok' })
+  })
+
+  app.get('/api/release', (_request, response) => {
+    response.json({ release: options.release ?? null })
   })
 
   const allowedOrigins = options.allowedOrigins ?? loadTrustedOrigins()
