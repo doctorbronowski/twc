@@ -265,6 +265,7 @@ describe('Activity API', () => {
       authService,
       allowedOrigins: new Set([allowedOrigin]),
       staticDirectory,
+      release: '0123456789abcdef0123456789abcdef01234567',
     }).listen(0, '127.0.0.1')
     await once(server, 'listening')
     const address = server.address() as AddressInfo
@@ -282,6 +283,16 @@ describe('Activity API', () => {
 
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { status: 'ok' })
+  })
+
+  it('reports the release captured at startup', async () => {
+    const response = await fetch(`${baseUrl}/api/release`)
+
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('cache-control'), 'no-store')
+    assert.deepEqual(await response.json(), {
+      release: '0123456789abcdef0123456789abcdef01234567',
+    })
   })
 
   it('prevents a stale demo page from reading or writing a different account', async () => {

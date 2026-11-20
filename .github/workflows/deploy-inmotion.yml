@@ -1,0 +1,116 @@
+name: Deploy to InMotion
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: twc-production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - name: Require a branch
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [[ "$REF_TYPE" != branch ]]; then
+            echo "Select a branch, not a tag." >&2
+            exit 1
+          fi
+
+      - name: Check out selected commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+
+      - name: Install and verify
+        run: |
+          python3 -B .github/deploy/test_remote.py
+          corepack pnpm@12.16.1 install --frozen-lockfile
+          corepack pnpm@12.16.1 lint
+          corepack pnpm@12.16.1 test
+          corepack pnpm@12.16.1 build
+          git diff --exit-code
+          git diff --cached --exit-code
+
+      - name: Build runtime archive
+        run: |
+          python3 .github/deploy/build-release.py "$RUNNER_TEMP/twc-release.tar.gz"
+          sha256sum "$RUNNER_TEMP/twc-release.tar.gz"
+
+      - name: Deploy and verify
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_INSTALLER_SHA256: ${{ vars.DEPLOY_INSTALLER_SHA256 }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          die() { echo "Deployment configuration error: $1" >&2; exit 1; }
+          [[ -n "$DEPLOY_SSH_KEY" && -n "$DEPLOY_KNOWN_HOSTS" ]] || die "SSH key or pinned host key is missing"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]] || die "Invalid DEPLOY_HOST"
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid DEPLOY_USER"
+          [[ "$DEPLOY_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && (( DEPLOY_PORT <= 65535 )) || die "Invalid DEPLOY_PORT"
+          [[ "$DEPLOY_INSTALLER_SHA256" =~ ^[a-f0-9]{64}$ ]] || die "Invalid installer hash"
+          [[ "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || die "Invalid source commit"
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || die "Invalid run identifier"
+
+          ssh_dir=$(mktemp -d "$RUNNER_TEMP/twc-ssh.XXXXXXXX")
+          key="$ssh_dir/key"
+          known_hosts="$ssh_dir/known_hosts"
+          remote_stage="/home/hoffma12/.twc-helper-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          remote_created=false
+          cleanup() {
+            if [[ "$remote_created" == true ]]; then
+              ssh "${ssh_options[@]}" "$destination" \
+                "rm -f '$remote_stage/remote.py' && rmdir '$remote_stage'" ||
+                echo "Warning: could not remove private helper staging directory $remote_stage" >&2
+            fi
+            rm -f "$key" "$known_hosts"
+            rmdir "$ssh_dir"
+          }
+          trap cleanup EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh_options=(-p "$DEPLOY_PORT" -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519
+            -o "UserKnownHostsFile=$known_hosts" -o ConnectTimeout=20)
+          destination="$DEPLOY_USER@$DEPLOY_HOST"
+          archive="$RUNNER_TEMP/twc-release.tar.gz"
+          archive_hash=$(sha256sum "$archive" | cut -d ' ' -f 1)
+          helper_hash=$(sha256sum .github/deploy/remote.py | cut -d ' ' -f 1)
+          {
+            echo "## Production deployment"
+            echo "- Branch: \`$SOURCE_BRANCH\`"
+            echo "- Commit: \`$SOURCE_COMMIT\`"
+            echo "- Artifact SHA-256: \`$archive_hash\`"
+            echo "- Database migrations are manual and are not run by this workflow."
+            echo "- MySQL integration tests requiring a configured isolated socket may be skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+          ssh "${ssh_options[@]}" "$destination" "umask 077; mkdir '$remote_stage'"
+          remote_created=true
+          ssh "${ssh_options[@]}" "$destination" \
+            "cat > '$remote_stage/remote.py'" < .github/deploy/remote.py
+          ssh "${ssh_options[@]}" "$destination" \
+            "printf '%s  %s\n' '$helper_hash' '$remote_stage/remote.py' | sha256sum -c - && exec python3 '$remote_stage/remote.py' '$SOURCE_COMMIT' '$archive_hash' '$DEPLOY_INSTALLER_SHA256'" \
+            < "$archive"
+          echo "- Installer, restart, and release health checks succeeded." >> "$GITHUB_STEP_SUMMARY"

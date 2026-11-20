@@ -198,11 +198,88 @@ than discarding errors.
 The command processes up to 50 ended or expired demos per run and reports the
 remaining eligible count. Configure cPanel cron and monitor failures and
 backlog before enabling demos; a successful cleanup does not erase backups.
-When production dependencies change, upload `scripts/install-production.sh` to
-`/home/hoffma12/twc` and run `bash install-production.sh` there in an InMotion
-terminal. Restart the Node app through cPanel after the installation succeeds.
 The document-root `.htaccess` should hold only the Passenger directives for
 this Node app; leave out any legacy PHP rewrite rules.
+
+### GitHub Actions deployment
+
+The manually dispatched **Deploy to InMotion** workflow deploys the selected
+branch's exact commit after lint, tests, and build pass. It never runs database
+migrations; apply and verify all required schema changes and grants separately
+in phpMyAdmin before deploying code that needs them. MySQL integration tests
+requiring an isolated test socket may be skipped on the runner.
+
+The workflow must exist on the default branch and on the selected branch. Push
+and merge workflow changes before trying to run it. In GitHub, create a
+`production` environment and configure:
+
+- Environment secret `DEPLOY_SSH_KEY`: the dedicated deployment private key.
+- Environment variables `DEPLOY_HOST`, `DEPLOY_PORT`, `DEPLOY_USER`,
+  `DEPLOY_KNOWN_HOSTS`, and `DEPLOY_INSTALLER_SHA256`. The known-hosts entry must
+  contain the independently verified SSH host key, not just its fingerprint.
+
+All branches are allowed by operator decision. Anyone who can push a branch and
+run its workflow can potentially use the production SSH credentials. Restrict
+repository and environment access accordingly. Rotate a compromised deployment
+key by authorizing a replacement on the host, updating the GitHub secret, and
+revoking the old key. Verify host-key changes through InMotion before updating
+`DEPLOY_KNOWN_HOSTS`; never disable host-key checking.
+
+The installer is Git-ignored and must be maintained separately. Upload the
+reviewed `scripts/install-production.sh` to
+`/home/hoffma12/twc/scripts/install-production.sh`; the hosting user must own
+it and its parent directories, with no group or world write access. Verify its
+SHA-256 on both systems and set the approved value in
+`DEPLOY_INSTALLER_SHA256`. Update this value only after reviewing and uploading
+a changed installer. The workflow invokes the verified installer with Bash;
+it does not upload, replace, or run database scripts.
+
+Run the workflow from GitHub's **Actions** tab, choose the source branch, and
+review its log and summary. The first run also checks runner-to-host SSH
+connectivity. Deployments update files in place and may briefly interrupt the
+site or mix versions. Old hashed frontend assets are retained for open tabs
+and require periodic, careful housekeeping. The workflow checks both site
+origins and a startup-captured commit identifier after requesting a Passenger
+restart. Also check sign-in in a browser. The restart mechanism has not yet
+been verified by an actual workflow deployment.
+
+The workflow saves private backups under `/home/hoffma12/.twc-deploy/backups`
+and uses `/home/hoffma12/.twc-deploy/deployment.lock`; manual deployments must
+take the same lock, for example with `flock -n` around the entire operation.
+GitHub permits only limited pending runs, which can be replaced; the concurrency
+group is not a FIFO queue. Backups are retained until an operator reviews and
+removes specific old backup directories; monitor account disk quota.
+
+On failure the workflow attempts to restore changed files and reinstall the
+previous dependencies, then restart and verify the previous release. Recovery
+is not guaranteed. If `.twc-deploy/in-progress.json` remains, further
+deployments stop. Before recovery, ensure no interrupted installer is still
+running and acquire the shared lock in a server terminal:
+
+```sh
+flock -n "$HOME/.twc-deploy/deployment.lock" bash
+```
+
+If lock acquisition fails, do not proceed. In the locked shell, inspect
+`"$HOME/.twc-deploy/in-progress.json"` and the
+referenced private backup. For each recorded `affected` path, restore the file
+from `backup/files/` if it is in `existed`; otherwise remove only that
+specifically recorded newly created file after confirming it is safe to do so.
+Restore `.twc-release` and the deployment manifest to the recorded
+`previous_release` and `previous_manifest` states, respecting
+`manifest_existed`: remove the release marker if `previous_release` is null,
+and remove `.twc-deploy/manifest.json` if `manifest_existed` is false. Verify
+the installer hash again, run it against the restored lockfile with
+`/bin/bash /home/hoffma12/twc/scripts/install-production.sh`, restart Passenger,
+and check both site origins and sign-in. If the
+previous release identifier exists, verify `/api/release` matches it. The first
+deployment's previous version has no identifier and cannot be identity-verified
+automatically. Remove the journal only after recovery is complete, then exit
+the locked shell; retain the backup until it is no longer needed.
+
+Do not delete unknown files or restore database backups as part of this
+procedure. A separate hosting environment was not used to test promotion,
+restart, or rollback.
 
 ## Pages
 
