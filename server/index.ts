@@ -1,9 +1,13 @@
 import { fileURLToPath } from 'node:url'
-import { MySqlActivityRepository } from './activityRepository.ts'
+import {
+  loadDemoActivityLimit,
+  MySqlActivityRepository,
+} from './activityRepository.ts'
 import { createApp } from './app.ts'
 import { AuthenticationService, loadTrustedOrigins } from './auth.ts'
 import { MySqlAuthRepository } from './authRepository.ts'
 import { createDatabasePool } from './database.ts'
+import { configureDemoStart } from './demoStart.ts'
 import { SmtpEmailAdapter } from './email.ts'
 
 const isProduction = process.env.NODE_ENV === 'production'
@@ -29,14 +33,18 @@ const authService = new AuthenticationService(
   new MySqlAuthRepository(pool),
   new SmtpEmailAdapter(),
 )
-const app = createApp(new MySqlActivityRepository(pool), {
-  authService,
-  allowedOrigins: loadTrustedOrigins(),
-  registrationEnabled: process.env.PUBLIC_REGISTRATION_ENABLED === 'true',
-  staticDirectory: isProduction
-    ? fileURLToPath(new URL('../dist/', import.meta.url))
-    : undefined,
-})
+const app = createApp(
+  new MySqlActivityRepository(pool, loadDemoActivityLimit()),
+  {
+    authService,
+    allowedOrigins: loadTrustedOrigins(),
+    registrationEnabled: process.env.PUBLIC_REGISTRATION_ENABLED === 'true',
+    demoStart: configureDemoStart(pool),
+    staticDirectory: isProduction
+      ? fileURLToPath(new URL('../dist/', import.meta.url))
+      : undefined,
+  },
+)
 
 const server = host
   ? app.listen(port, host, () => {

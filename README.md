@@ -94,6 +94,113 @@ settings in cPanel's application environment. Keep
 owner-scoped activity API are ready. Keep SMTP credentials in the hosting
 provider's secret environment settings. Do not upload `.env.local` or use the
 local database setup script on the hosting account.
+The optional demo schema foundation has a one-time production migration in
+`migrations/20261119_demo_schema.sql`; follow its preconditions and
+apply database grants separately. The migration alone does not enable a demo.
+The migrations directory is Git-ignored.
+The shared demo-start limiter has a separate one-time production migration in
+`migrations/20261120_demo_start_rate_limit.sql`. The application database
+user needs `SELECT`, `INSERT`, and `DELETE` on `demo_start_attempts`, granted
+separately by an administrator. The local setup command creates this table
+and grants those permissions.
+The demo creation backend copies from `DEMO_TEMPLATE_EMAIL` (initially
+`twc@hitsdev.com`) and caps all demo accounts, including those awaiting
+cleanup, with `DEMO_ACCOUNT_LIMIT` (initially `10`). Demo activity writes are
+capped by `DEMO_ACTIVITY_LIMIT` (initially `20`); the cap includes copied
+activities. Configure these values in the private local environment and
+later in the production application environment before demo mode is enabled.
+An invalid activity limit prevents startup; demo writes fail closed if it is
+absent. The shared limiter allows at most 10 attempts per IP in a rolling
+15-minute window across workers. It stores HMAC-SHA256 hashes rather than
+raw IP addresses; set `DEMO_IP_HASH_SECRET` to the same private, randomly
+generated 32-byte base64url value for every worker before enabling demo
+starts. Changing that secret resets the effective IP limits. Expired limiter
+records are removed in batches when starts are attempted; if there is no
+traffic, expired hashes remain until subsequent attempts or future scheduled
+maintenance.
+
+Demo mode is disabled by default (`DEMO_ENABLED=false`). When enabled, the
+sign-in page offers a temporary demo, with a five-minute inactivity timeout
+and a persistent demo banner. Demo users cannot manage an account; sign-out
+and expiration clear the tab's export selections and preview. Browser tabs
+coordinate demo activity and sign-out when browser storage or broadcast
+channels are available; the server remains authoritative. The client
+uses the database-reported remaining lifetime, conservatively measured from
+the start of the last successful authenticated request. Network delays can
+therefore end a demo slightly early without relying on the browser and
+database clocks matching.
+
+The demo-start API requires a trusted origin and an `Idempotency-Key`
+containing 32 random bytes encoded as unpadded base64url. A successful request
+sets a five-minute demo session cookie; reusing a successful key returns a
+conflict rather than creating another account. An existing valid session is not
+replaced. The key is retained only until the demo account is cleaned up.
+
+The separate one-time production migration
+`migrations/20261120_demo_start_idempotency.sql` creates the request
+table; an administrator must separately grant the application database user
+`SELECT` and `INSERT` on `demo_start_requests`. The local setup command creates
+the table and grants those permissions. Test the migration against the actual
+production MariaDB version before deployment.
+
+Before enabling demos, verify exactly how Passenger and any proxies provide
+client addresses. Set `DEMO_CLIENT_IP_SOURCE=direct` only if the Node socket
+address is the real client. For `forwarded`, set `DEMO_TRUSTED_PROXY_IP` to the
+exact immediate proxy address and verify that it overwrites or appends the
+real client address as the rightmost `X-Forwarded-For` value. Set
+`DEMO_CLIENT_IP_VERIFIED=true` in production only after verification. Spoofable
+headers or a shared proxy address undermine the limit. Production proxy
+behavior has not yet been verified; keep demo mode disabled until that and the
+remaining deployment and cleanup work are complete.
+The demo cleanup command is implemented but should not be scheduled until
+demo creation and the remaining demo phases are complete. On production, use a
+separate maintenance database identity, not the web application's database
+user. Give that identity `SELECT` and `DELETE` on `account` and
+`work_search_activities`, and `SELECT` and `UPDATE` on `demo_instances`.
+These are table-wide privileges, so protect the credentials; the command
+itself checks both the account kind and demo marker before deleting.
+
+The wrappers in `scripts/cleanup-demo-local.sh` and
+`scripts/cleanup-demo-production.sh` call the same guarded cleanup command. Both
+require Node 22.18 or newer and an installed application dependency tree.
+The local wrapper reads `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`,
+`DB_ADMIN_USER`, and `DB_ADMIN_PASSWORD` from `.env.local`. It requires host
+`127.0.0.1`, database `twc`, and an administrator distinct from the application
+user. Administrator access is intended only for local testing; keep `.env.local`
+private and never upload it to production.
+
+For production, create a separate private environment file at
+`/home/hoffma12/.config/twc/demo-cleanup.env`, outside public directories.
+Restrict the file to the owning user (mode `0600`). Set
+`DEMO_CLEANUP_DB_HOST`, `DEMO_CLEANUP_DB_PORT`, `DEMO_CLEANUP_DB_NAME`,
+`DEMO_CLEANUP_DB_USER`, and `DEMO_CLEANUP_DB_PASSWORD`, as well as `DB_USER`
+(the application database username, used to check that the cleanup user is
+separate). These are Node environment files, not shell scripts. Verify the
+production host and database before use. Do not put credentials in the
+application archive, source control, or cron command.
+
+Provision the production maintenance user and the grants above separately; the
+wrappers do not create users or change privileges.
+
+For manual local cleanup:
+
+```sh
+bash scripts/cleanup-demo-local.sh
+```
+
+For production, copy the production wrapper to a private location on the
+hosting account. After deployment readiness and a manual non-production test,
+invoke it with `/bin/bash` using its absolute installed path in cPanel cron.
+The wrapper uses the production Node and project paths shown in the script;
+verify them on the host. Configure cron output and failure monitoring rather
+than discarding errors.
+
+The command processes up to 50 ended or expired demos per run and reports the
+remaining eligible count. Configure cPanel cron and monitor failures and
+backlog before enabling demos; a successful cleanup does not erase backups.
+When production dependencies change, upload `scripts/install-production.sh` to
+`/home/hoffma12/twc` and run `bash install-production.sh` there in an InMotion
+terminal. Restart the Node app through cPanel after the installation succeeds.
 The document-root `.htaccess` should hold only the Passenger directives for
 this Node app; leave out any legacy PHP rewrite rules.
 

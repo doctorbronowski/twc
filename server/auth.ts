@@ -5,12 +5,16 @@ import { hashPassword, verifyPassword } from './password.ts'
 
 export const sessionCookieName = 'twc_session'
 export const sessionDurationSeconds = 15 * 60
+export const demoSessionDurationSeconds = 5 * 60
+
+export type AccountKind = 'regular' | 'demo'
 
 export interface AuthAccount {
   id: number
   username: string
   pendingEmail: string | null
   passwordHash: string
+  kind: AccountKind
   emailVerifiedAt: string | null
   disabledAt: string | null
 }
@@ -18,6 +22,7 @@ export interface AuthAccount {
 export interface AuthenticatedUser {
   id: number
   username: string
+  kind: AccountKind
 }
 
 export interface AccountDetails {
@@ -42,6 +47,7 @@ export type CreateSessionResult =
 
 export interface AuthenticatedSession extends AuthenticatedUser {
   sessionId: number
+  demoRemainingMs?: number
 }
 
 export interface LoginResult {
@@ -120,6 +126,7 @@ export type AuthErrorCode =
   | 'invalid-token'
   | 'email-delivery'
   | 'duplicate-email'
+  | 'demo-restricted'
 
 export class AuthError extends Error {
   readonly code: AuthErrorCode
@@ -135,11 +142,18 @@ function hashToken(token: string): Buffer {
   return createHash('sha256').update(token).digest()
 }
 
+export function demoSessionTag(token: string): string {
+  return createHash('sha256')
+    .update('twc-demo-session:')
+    .update(token)
+    .digest('hex')
+}
+
 function isToken(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value)
 }
 
-function createToken(): { token: string; tokenHash: Buffer } {
+export function createToken(): { token: string; tokenHash: Buffer } {
   const token = randomBytes(32).toString('base64url')
   return { token, tokenHash: hashToken(token) }
 }
@@ -154,11 +168,17 @@ export function readSessionToken(request: Request): string | null {
   return isToken(token) ? token : null
 }
 
-export function setSessionCookie(response: Response, token: string) {
+export function setSessionCookie(
+  response: Response,
+  token: string,
+  kind: AccountKind,
+) {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
+  const duration =
+    kind === 'demo' ? demoSessionDurationSeconds : sessionDurationSeconds
   response.setHeader(
     'Set-Cookie',
-    `${sessionCookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${sessionDurationSeconds}${secure}`,
+    `${sessionCookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${duration}${secure}`,
   )
 }
 
@@ -182,7 +202,7 @@ export class AuthenticationService {
   }
 
   async getAccountDetails(accountId: number): Promise<AccountDetails | null> {
-    const account = await this.repository.findAccountById(accountId)
+    const account = await this.findRegularAccount(accountId)
     if (!account || account.disabledAt !== null) {
       return null
     }
@@ -231,11 +251,15 @@ export class AuthenticationService {
     const account = username
       ? await this.repository.findAccountByUsername(username)
       : null
-    const passwordHash = account?.passwordHash ?? (await this.dummyPasswordHash)
+    const passwordHash =
+      account?.kind === 'regular'
+        ? account.passwordHash
+        : await this.dummyPasswordHash
     const passwordMatches = await verifyPassword(password, passwordHash)
 
     if (
       !account?.emailVerifiedAt ||
+      account.kind !== 'regular' ||
       account.disabledAt !== null ||
       !passwordMatches ||
       passwordValue !== password
@@ -246,10 +270,10 @@ export class AuthenticationService {
       )
     }
 
-    const sessionToken = randomBytes(32).toString('base64url')
+    const { token: sessionToken, tokenHash } = createToken()
     const result = await this.repository.createSession(
       account,
-      hashToken(sessionToken),
+      tokenHash,
       existingSessionToken && isToken(existingSessionToken)
         ? hashToken(existingSessionToken)
         : null,
@@ -267,7 +291,7 @@ export class AuthenticationService {
       )
     }
     return {
-      user: { id: account.id, username: account.username },
+      user: { id: account.id, username: account.username, kind: account.kind },
       sessionToken,
     }
   }
@@ -298,7 +322,11 @@ export class AuthenticationService {
       return
     }
     const account = await this.repository.findAccountByUsername(username)
-    if (!account || account.emailVerifiedAt || account.disabledAt !== null) {
+    if (
+      account?.kind !== 'regular' ||
+      account.emailVerifiedAt ||
+      account.disabledAt !== null
+    ) {
       return
     }
     await this.sendVerification(account.id, account.username, true)
@@ -310,7 +338,11 @@ export class AuthenticationService {
       return
     }
     const account = await this.repository.findAccountByUsername(username)
-    if (!account?.emailVerifiedAt || account.disabledAt !== null) {
+    if (
+      !account?.emailVerifiedAt ||
+      account.kind !== 'regular' ||
+      account.disabledAt !== null
+    ) {
       return
     }
 
@@ -367,7 +399,7 @@ export class AuthenticationService {
       )
     }
 
-    const account = await this.repository.findAccountById(accountId)
+    const account = await this.findRegularAccount(accountId)
     const currentPasswordMatches =
       account !== null &&
       account.disabledAt === null &&
@@ -408,7 +440,7 @@ export class AuthenticationService {
       )
     }
 
-    const account = await this.repository.findAccountById(accountId)
+    const account = await this.findRegularAccount(accountId)
     const currentPasswordMatches =
       account !== null &&
       account.disabledAt === null &&
@@ -449,7 +481,7 @@ export class AuthenticationService {
       )
     }
 
-    const account = await this.repository.findAccountById(accountId)
+    const account = await this.findRegularAccount(accountId)
     const currentPasswordMatches =
       account !== null &&
       account.disabledAt === null &&
@@ -504,7 +536,7 @@ export class AuthenticationService {
   }
 
   async resendEmailChange(accountId: number): Promise<string> {
-    const account = await this.repository.findAccountById(accountId)
+    const account = await this.findRegularAccount(accountId)
     if (!account || account.disabledAt !== null || !account.pendingEmail) {
       throw new AuthError('invalid-input', 'There is no pending email change.')
     }
@@ -539,6 +571,7 @@ export class AuthenticationService {
   }
 
   async cancelEmailChange(accountId: number): Promise<void> {
+    await this.findRegularAccount(accountId)
     await this.repository.cancelEmailChange(accountId)
   }
 
@@ -572,6 +605,19 @@ export class AuthenticationService {
       }
     }
     return result
+  }
+
+  private async findRegularAccount(
+    accountId: number,
+  ): Promise<AuthAccount | null> {
+    const account = await this.repository.findAccountById(accountId)
+    if (account?.kind === 'demo') {
+      throw new AuthError(
+        'demo-restricted',
+        'Account management is unavailable in demo mode.',
+      )
+    }
+    return account
   }
 
   private async sendVerification(
@@ -624,8 +670,21 @@ export function requireAuthentication(
       request.authenticatedUser = {
         id: session.id,
         username: session.username,
+        kind: session.kind,
       }
-      setSessionCookie(response, token)
+      request.authenticatedSessionId = session.sessionId
+      if (session.kind === 'demo') {
+        if (
+          !Number.isInteger(session.demoRemainingMs) ||
+          session.demoRemainingMs === undefined ||
+          session.demoRemainingMs < 0 ||
+          session.demoRemainingMs > demoSessionDurationSeconds * 1000
+        ) {
+          throw new Error('Demo session deadline is unavailable.')
+        }
+        response.setHeader('X-TWC-Demo-Remaining-Ms', session.demoRemainingMs)
+      }
+      setSessionCookie(response, token, session.kind)
       next()
     } catch (error) {
       console.error(
@@ -701,6 +760,7 @@ declare global {
   namespace Express {
     interface Request {
       authenticatedUser?: AuthenticatedUser
+      authenticatedSessionId?: number
     }
   }
 }

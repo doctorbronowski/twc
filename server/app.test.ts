@@ -12,15 +12,24 @@ import type {
   ActivityRecord,
   ActivityRepository,
 } from './activityRepository.ts'
+import {
+  DemoActivityError,
+  type DemoWriteContext,
+} from './activityRepository.ts'
 import { createApp } from './app.ts'
 import type { AuthAccount, AuthRepository } from './auth.ts'
-import { AuthenticationService, sessionCookieName } from './auth.ts'
+import {
+  AuthenticationService,
+  demoSessionTag,
+  sessionCookieName,
+} from './auth.ts'
 
 const authenticatedAccount: AuthAccount = {
   id: 8,
   username: 'activity-owner@example.com',
   pendingEmail: null,
   passwordHash: 'unused-by-session-test',
+  kind: 'regular',
   emailVerifiedAt: new Date().toISOString(),
   disabledAt: null,
 }
@@ -64,6 +73,8 @@ describe('Activity API', () => {
   let updateFailure = false
   let deleteFailure = false
   let lastAccountId: number | undefined
+  let lastDemoContext: DemoWriteContext | undefined
+  let demoWriteFailure: 'session-expired' | 'activity-limit' | null = null
   const activityOwners = new Map<number, number>()
 
   const authRepository: AuthRepository = {
@@ -120,13 +131,21 @@ describe('Activity API', () => {
         sessionId: 1,
         id: authenticatedAccount.id,
         username: authenticatedAccount.username,
+        kind: authenticatedAccount.kind,
+        ...(authenticatedAccount.kind === 'demo'
+          ? { demoRemainingMs: 300_000 }
+          : {}),
       }
     },
     async revokeSession() {},
   }
 
   const repository: ActivityRepository = {
-    async createActivity(accountId, activity) {
+    async createActivity(accountId, activity, demo) {
+      lastDemoContext = demo
+      if (demoWriteFailure) {
+        throw new DemoActivityError(demoWriteFailure)
+      }
       if (repositoryFailure) {
         throw new Error(
           'Database connection details must not reach the response.',
@@ -136,7 +155,11 @@ describe('Activity API', () => {
       savedActivity = activity
       return 42
     },
-    async updateActivity(accountId, id, activity) {
+    async updateActivity(accountId, id, activity, demo) {
+      lastDemoContext = demo
+      if (demoWriteFailure) {
+        throw new DemoActivityError(demoWriteFailure)
+      }
       if (updateFailure) {
         throw new Error(
           'Database connection details must not reach the response.',
@@ -152,7 +175,11 @@ describe('Activity API', () => {
       savedActivity = activity
       return true
     },
-    async deleteActivity(accountId, id) {
+    async deleteActivity(accountId, id, demo) {
+      lastDemoContext = demo
+      if (demoWriteFailure) {
+        throw new DemoActivityError(demoWriteFailure)
+      }
       if (deleteFailure) {
         throw new Error(
           'Database connection details must not reach the response.',
@@ -255,6 +282,79 @@ describe('Activity API', () => {
 
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), { status: 'ok' })
+  })
+
+  it('prevents a stale demo page from reading or writing a different account', async () => {
+    lastAccountId = undefined
+    for (const method of ['GET', 'POST']) {
+      const response = await fetch(`${baseUrl}/api/activities`, {
+        method,
+        headers: {
+          'X-TWC-Demo-Session': 'b'.repeat(64),
+          'Content-Type': 'application/json',
+        },
+        body:
+          method === 'POST'
+            ? JSON.stringify({ job_title: 'stale' })
+            : undefined,
+      })
+      assert.equal(response.status, 409)
+      assert.equal(response.headers.get('x-twc-demo-session-changed'), 'true')
+    }
+    assert.equal(lastAccountId, undefined)
+    authenticatedAccount.kind = 'demo'
+    try {
+      const stale = await fetch(`${baseUrl}/api/activities`, {
+        headers: { 'X-TWC-Demo-Session': 'b'.repeat(64) },
+      })
+      assert.equal(stale.status, 409)
+      const response = await fetch(`${baseUrl}/api/activities`, {
+        headers: { 'X-TWC-Demo-Session': demoSessionTag(sessionToken) },
+      })
+      assert.equal(response.status, 200)
+      assert.equal(
+        response.headers.get('x-twc-demo-session'),
+        demoSessionTag(sessionToken),
+      )
+    } finally {
+      authenticatedAccount.kind = 'regular'
+    }
+  })
+
+  it('passes the authenticated demo session and reports quota or expired writes', async () => {
+    authenticatedAccount.kind = 'demo'
+    try {
+      demoWriteFailure = 'activity-limit'
+      const limited = await fetch(`${baseUrl}/api/activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      assert.equal(limited.status, 429)
+      assert.deepEqual(await limited.json(), {
+        error:
+          'The demo activity limit has been reached. Delete an activity before adding another.',
+      })
+      assert.deepEqual(lastDemoContext, { sessionId: 1 })
+
+      demoWriteFailure = 'session-expired'
+      for (const [method, suffix] of [
+        ['POST', ''],
+        ['PUT', '/42'],
+        ['DELETE', '/42'],
+      ]) {
+        const response = await fetch(`${baseUrl}/api/activities${suffix}`, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: method === 'DELETE' ? undefined : JSON.stringify({}),
+        })
+        assert.equal(response.status, 401, method)
+        assert.match(response.headers.get('set-cookie') ?? '', /Max-Age=0/)
+      }
+    } finally {
+      authenticatedAccount.kind = 'regular'
+      demoWriteFailure = null
+    }
   })
 
   it('requires authentication for every activity API operation', async () => {

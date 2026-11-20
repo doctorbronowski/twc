@@ -1,5 +1,11 @@
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
-import { fetchActivityApi } from './activityApi.ts'
+import {
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react'
+import { fetchActivityApi, setActivityDemoAccount } from './activityApi.ts'
 import ActivityExportPage from './components/ActivityExportPage.tsx'
 import ActivityForm, {
   type ActivityFormValues,
@@ -14,6 +20,14 @@ import {
   PasswordResetPage,
 } from './components/AuthPages.tsx'
 import PasswordInput from './components/PasswordInput.tsx'
+import {
+  demoTimeoutMs,
+  hasDemoEnded,
+  isDemoSignal,
+  listenForDemoSignals,
+  publishDemoSignal,
+} from './demoSession.ts'
+import { clearExportStorage } from './exportStorage.ts'
 import { isValidPassword } from './passwordValidation.ts'
 import './index.css'
 
@@ -56,6 +70,7 @@ function AppFrame({
   onSignOut,
   isSigningOut,
   signOutError,
+  user,
   notice,
   onDismissNotice,
 }: AppFrameProps) {
@@ -70,15 +85,17 @@ function AppFrame({
             <span>TWC Work Search</span>
           </a>
           <nav className="top-nav" aria-label="Main navigation">
-            {navigation.map((item) => (
-              <a
-                key={item.page}
-                href={item.href}
-                aria-current={activePage === item.page ? 'page' : undefined}
-              >
-                {item.label}
-              </a>
-            ))}
+            {navigation
+              .filter((item) => user.kind !== 'demo' || item.page !== 'account')
+              .map((item) => (
+                <a
+                  key={item.page}
+                  href={item.href}
+                  aria-current={activePage === item.page ? 'page' : undefined}
+                >
+                  {item.label}
+                </a>
+              ))}
           </nav>
           <div className="header-actions">
             <div className="header-account">
@@ -99,6 +116,13 @@ function AppFrame({
           </div>
         </div>
       </header>
+
+      {user.kind === 'demo' && (
+        <aside className="demo-banner" aria-label="Demo mode">
+          <strong>Demo</strong> — Temporary sample data. Your demo ends after
+          five minutes of inactivity. Do not enter sensitive information.
+        </aside>
+      )}
 
       {notice && onDismissNotice && (
         <div className={`notice-banner notice-${notice.type}`}>
@@ -197,7 +221,10 @@ function EnterPage(props: ProtectedPageProps) {
       if (!response.ok) {
         setNotice({
           type: 'error',
-          message: 'We couldn’t save the activity. Please try again.',
+          message:
+            response.status === 429
+              ? 'The demo activity limit has been reached. Delete an activity before adding another.'
+              : 'We couldn’t save the activity. Please try again.',
         })
         return false
       }
@@ -285,7 +312,7 @@ function ExportPage(props: ProtectedPageProps) {
 function PrintPreviewPage(props: ProtectedPageProps) {
   return (
     <AppFrame activePage="export" {...props}>
-      <ActivityPrintPreviewPage />
+      <ActivityPrintPreviewPage demo={props.user.kind === 'demo'} />
     </AppFrame>
   )
 }
@@ -913,6 +940,19 @@ function CurrentPage(props: ProtectedPageProps) {
   const path = window.location.pathname.replace(/\/+$/, '') || '/'
 
   if (path === '/account') {
+    if (props.user.kind === 'demo') {
+      return (
+        <AppFrame activePage="account" {...props}>
+          <section className="placeholder-panel">
+            <h1>Manage Account unavailable</h1>
+            <p>Account management is not available in demo mode.</p>
+            <a className="button button-secondary" href="/">
+              Return home
+            </a>
+          </section>
+        </AppFrame>
+      )
+    }
     return <ManageAccountPage {...props} />
   }
 
@@ -937,9 +977,11 @@ function CurrentPage(props: ProtectedPageProps) {
 
 type SessionState =
   | { status: 'loading' }
-  | { status: 'authenticated'; user: AuthUser }
+  | { status: 'authenticated'; user: AuthUser; startedAt: number }
   | { status: 'unauthenticated' }
   | { status: 'error' }
+  | { status: 'ending-demo'; id: number; tag: string }
+  | { status: 'end-demo-error'; id: number; tag: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -951,7 +993,15 @@ function isAuthUser(value: unknown): value is AuthUser {
     typeof value.id === 'number' &&
     Number.isSafeInteger(value.id) &&
     value.id > 0 &&
-    typeof value.username === 'string'
+    typeof value.username === 'string' &&
+    (value.kind === 'regular' ||
+      (value.kind === 'demo' &&
+        typeof value.demoSession === 'string' &&
+        /^[0-9a-f]{64}$/.test(value.demoSession) &&
+        typeof value.demoRemainingMs === 'number' &&
+        Number.isInteger(value.demoRemainingMs) &&
+        value.demoRemainingMs >= 0 &&
+        value.demoRemainingMs <= demoTimeoutMs))
   )
 }
 
@@ -973,6 +1023,7 @@ function readReturnDestination(path: string): string {
 
 async function readSession(): Promise<SessionState> {
   try {
+    const startedAt = Date.now()
     const response = await fetch('/api/auth/session', {
       credentials: 'same-origin',
     })
@@ -985,7 +1036,7 @@ async function readSession(): Promise<SessionState> {
       return { status: 'error' }
     }
     if (body.authenticated && isAuthUser(body.user)) {
-      return { status: 'authenticated', user: body.user }
+      return { status: 'authenticated', user: body.user, startedAt }
     }
     if (!body.authenticated) {
       return { status: 'unauthenticated' }
@@ -996,6 +1047,49 @@ async function readSession(): Promise<SessionState> {
   return { status: 'error' }
 }
 
+function prepareAccountStorage(user: AuthUser) {
+  try {
+    const owner = window.sessionStorage.getItem('twc.export.owner')
+    const identity =
+      user.kind === 'demo' ? `demo:${user.demoSession}` : `regular:${user.id}`
+    if (
+      (owner !== null && owner !== identity) ||
+      (owner === null && user.kind === 'demo')
+    ) {
+      if (!clearExportStorage()) {
+        console.warn('Unable to clear the previous export selection.')
+      }
+    }
+    window.sessionStorage.setItem('twc.export.owner', identity)
+    if (user.kind === 'demo') {
+      window.sessionStorage.setItem(
+        'twc.demo.owner',
+        JSON.stringify({
+          type: 'ended',
+          id: user.id,
+          tag: user.demoSession,
+        }),
+      )
+    } else {
+      window.sessionStorage.removeItem('twc.demo.owner')
+    }
+  } catch {
+    console.warn('Unable to isolate export storage for this account.')
+  }
+}
+
+function clearDemoStorage() {
+  if (!clearExportStorage()) {
+    console.warn('Unable to clear demo export data from this tab.')
+  }
+  try {
+    window.sessionStorage.removeItem('twc.export.owner')
+    window.sessionStorage.removeItem('twc.demo.owner')
+  } catch {
+    console.warn('Unable to clear the demo export owner.')
+  }
+}
+
 function App() {
   const path = window.location.pathname.replace(/\/+$/, '') || '/'
   const returnDestination = readReturnDestination(path)
@@ -1004,28 +1098,186 @@ function App() {
   const [isSigningOut, setIsSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState<string | null>(null)
 
+  const endDemo = useCallback(async function endDemo(
+    id: number,
+    tag: string,
+    revoke: boolean,
+    reason: 'expired' | 'ended',
+  ) {
+    setSession({ status: 'ending-demo', id, tag })
+    clearDemoStorage()
+    publishDemoSignal({ type: 'ended', id, tag })
+    if (revoke) {
+      try {
+        const response = await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'X-TWC-Demo-Session': tag },
+        })
+        if (!response.ok && response.status !== 409) {
+          throw new Error('Demo sign-out failed.')
+        }
+      } catch {
+        setSession({ status: 'end-demo-error', id, tag })
+        return
+      }
+    }
+    window.location.replace(`/login?demo=${reason}`)
+  }, [])
+
   useEffect(() => {
     let active = true
     void readSession().then((result) => {
       if (active) {
+        if (result.status === 'authenticated') {
+          if (
+            result.user.kind === 'demo' &&
+            hasDemoEnded(result.user.demoSession)
+          ) {
+            void endDemo(result.user.id, result.user.demoSession, true, 'ended')
+            return
+          }
+          prepareAccountStorage(result.user)
+          if (result.user.kind === 'demo') {
+            publishDemoSignal({
+              type: 'activity',
+              id: result.user.id,
+              tag: result.user.demoSession,
+              startedAt: result.startedAt,
+              remainingMs: result.user.demoRemainingMs,
+            })
+          }
+        }
+        if (result.status === 'unauthenticated') {
+          try {
+            const stored = window.sessionStorage.getItem('twc.demo.owner')
+            const previousDemo: unknown = stored ? JSON.parse(stored) : null
+            if (isDemoSignal(previousDemo) && previousDemo.type === 'ended') {
+              clearDemoStorage()
+              publishDemoSignal(previousDemo)
+              window.location.replace('/login?demo=expired')
+              return
+            }
+          } catch {
+            console.warn('Unable to check the previous demo state.')
+          }
+        }
         setSession(result)
       }
     })
     return () => {
       active = false
     }
-  }, [])
+  }, [endDemo])
 
   useEffect(() => {
     function handleSessionExpired() {
-      setSessionExpired(true)
+      if (session.status === 'authenticated' && session.user.kind === 'demo') {
+        void endDemo(
+          session.user.id,
+          session.user.demoSession,
+          false,
+          'expired',
+        )
+      } else {
+        setSessionExpired(true)
+      }
     }
 
     window.addEventListener('twc:session-expired', handleSessionExpired)
     return () => {
       window.removeEventListener('twc:session-expired', handleSessionExpired)
     }
-  }, [])
+  }, [session, endDemo])
+
+  useEffect(() => {
+    if (session.status !== 'authenticated' || session.user.kind !== 'demo')
+      return
+    const id = session.user.id
+    const tag = session.user.demoSession
+    let lastStartedAt = session.startedAt
+    let wallDeadline = session.startedAt + session.user.demoRemainingMs
+    let monotonicDeadline =
+      performance.now() +
+      Math.min(demoTimeoutMs, Math.max(0, wallDeadline - Date.now()))
+    let timer: ReturnType<typeof setTimeout>
+    let stopped = false
+
+    function checkDeadline() {
+      if (stopped) return
+      if (hasDemoEnded(tag)) {
+        stopped = true
+        void endDemo(id, tag, true, 'ended')
+        return
+      }
+      const remaining = Math.min(
+        wallDeadline - Date.now(),
+        monotonicDeadline - performance.now(),
+      )
+      if (remaining <= 0) {
+        stopped = true
+        void endDemo(id, tag, true, 'expired')
+        return
+      }
+      clearTimeout(timer)
+      timer = setTimeout(checkDeadline, remaining)
+    }
+
+    function extend(startedAt: number, remainingMs: number) {
+      if (startedAt > Date.now() || startedAt < lastStartedAt) return
+      lastStartedAt = startedAt
+      wallDeadline = startedAt + remainingMs
+      monotonicDeadline =
+        performance.now() +
+        Math.max(0, Math.min(demoTimeoutMs, wallDeadline - Date.now()))
+      checkDeadline()
+    }
+
+    function onActivity(event: Event) {
+      if (!(event instanceof CustomEvent) || !isDemoSignal(event.detail)) return
+      if (
+        event.detail.type === 'activity' &&
+        event.detail.id === id &&
+        event.detail.tag === tag
+      ) {
+        extend(event.detail.startedAt, event.detail.remainingMs)
+        publishDemoSignal(event.detail)
+      }
+    }
+    const unsubscribe = listenForDemoSignals((signal) => {
+      if (stopped) return
+      if (
+        signal.type === 'activity' &&
+        signal.id === id &&
+        signal.tag === tag
+      ) {
+        extend(signal.startedAt, signal.remainingMs)
+      } else if (
+        (signal.type === 'ended' && signal.tag === tag) ||
+        (signal.type === 'active' && (signal.id !== id || signal.tag !== tag))
+      ) {
+        stopped = true
+        void endDemo(id, tag, true, 'ended')
+      }
+    })
+    window.addEventListener('twc:demo-activity', onActivity)
+    window.addEventListener('focus', checkDeadline)
+    document.addEventListener('visibilitychange', checkDeadline)
+    if (hasDemoEnded(tag)) {
+      stopped = true
+      void endDemo(id, tag, true, 'ended')
+    } else {
+      checkDeadline()
+    }
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+      unsubscribe()
+      window.removeEventListener('twc:demo-activity', onActivity)
+      window.removeEventListener('focus', checkDeadline)
+      document.removeEventListener('visibilitychange', checkDeadline)
+    }
+  }, [session, endDemo])
 
   useEffect(() => {
     if (session.status === 'authenticated' && path === '/login') {
@@ -1044,11 +1296,33 @@ function App() {
       const response = await fetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'same-origin',
+        headers:
+          session.status === 'authenticated' && session.user.kind === 'demo'
+            ? { 'X-TWC-Demo-Session': session.user.demoSession }
+            : undefined,
       })
+      if (
+        response.status === 409 &&
+        session.status === 'authenticated' &&
+        session.user.kind === 'demo'
+      ) {
+        void endDemo(session.user.id, session.user.demoSession, false, 'ended')
+        return
+      }
       if (!response.ok) {
         throw new Error('Sign out could not be completed.')
       }
-      window.location.replace('/login')
+      if (session.status === 'authenticated' && session.user.kind === 'demo') {
+        clearDemoStorage()
+        publishDemoSignal({
+          type: 'ended',
+          id: session.user.id,
+          tag: session.user.demoSession,
+        })
+        window.location.replace('/login?demo=ended')
+      } else {
+        window.location.replace('/login')
+      }
     } catch {
       setSignOutError('Sign out failed. Please try again.')
     } finally {
@@ -1068,6 +1342,32 @@ function App() {
     return <PasswordResetPage />
   }
 
+  if (session.status === 'ending-demo' || session.status === 'end-demo-error') {
+    return (
+      <main className="auth-state">
+        {session.status === 'ending-demo' ? (
+          <p role="status">Ending your demo…</p>
+        ) : (
+          <>
+            <p role="alert">
+              Your demo has ended locally, but sign-out could not be confirmed.
+              Check your connection and retry.
+            </p>
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() =>
+                void endDemo(session.id, session.tag, true, 'expired')
+              }
+            >
+              Retry sign out
+            </button>
+          </>
+        )}
+      </main>
+    )
+  }
+
   if (path === '/login') {
     if (session.status === 'loading') {
       return (
@@ -1084,7 +1384,18 @@ function App() {
       )
     }
     return (
-      <LoginPage onLogin={() => window.location.replace(returnDestination)} />
+      <LoginPage
+        onLogin={(user) => {
+          publishDemoSignal({
+            type: 'active',
+            id: user.id,
+            tag: user.kind === 'demo' ? user.demoSession : null,
+          })
+          window.location.replace(
+            user.kind === 'demo' ? '/' : returnDestination,
+          )
+        }}
+      />
     )
   }
 
@@ -1118,7 +1429,18 @@ function App() {
 
   if (session.status === 'unauthenticated') {
     return (
-      <LoginPage onLogin={() => window.location.replace(returnDestination)} />
+      <LoginPage
+        onLogin={(user) => {
+          publishDemoSignal({
+            type: 'active',
+            id: user.id,
+            tag: user.kind === 'demo' ? user.demoSession : null,
+          })
+          window.location.replace(
+            user.kind === 'demo' ? '/' : returnDestination,
+          )
+        }}
+      />
     )
   }
 
@@ -1128,6 +1450,11 @@ function App() {
     isSigningOut,
     signOutError,
   }
+  setActivityDemoAccount(
+    session.user.kind === 'demo'
+      ? { id: session.user.id, tag: session.user.demoSession }
+      : null,
+  )
 
   return (
     <>
@@ -1138,7 +1465,12 @@ function App() {
         <LoginPage
           overlay
           onLogin={(user) => {
-            setSession({ status: 'authenticated', user })
+            publishDemoSignal({
+              type: 'active',
+              id: user.id,
+              tag: user.kind === 'demo' ? user.demoSession : null,
+            })
+            setSession({ status: 'authenticated', user, startedAt: Date.now() })
             setSessionExpired(false)
           }}
         />
