@@ -2,14 +2,22 @@ import path from 'node:path'
 import type { Request, RequestHandler, Response } from 'express'
 import express from 'express'
 import { parseActivity } from './activityInput.ts'
-import type { ActivityRepository } from './activityRepository.ts'
+import {
+  type ActivityRepository,
+  DemoActivityError,
+  type DemoWriteContext,
+} from './activityRepository.ts'
 import {
   type AuthenticationService,
+  clearSessionCookie,
+  demoSessionTag,
   hasTrustedOrigin,
   loadTrustedOrigins,
+  readSessionToken,
   requireAuthentication,
 } from './auth.ts'
 import { createAuthRouter } from './authRoutes.ts'
+import type { DemoStartDependencies } from './demoStart.ts'
 
 const activityPageSizes = new Set([5, 10, 25, 50, 100])
 const defaultActivityPageSize = 5
@@ -76,6 +84,7 @@ interface AppOptions {
   authService: AuthenticationService
   allowedOrigins?: ReadonlySet<string>
   registrationEnabled?: boolean
+  demoStart?: DemoStartDependencies
 }
 
 function getAuthenticatedAccountId(
@@ -88,6 +97,32 @@ function getAuthenticatedAccountId(
     return null
   }
   return accountId
+}
+
+function getDemoWriteContext(request: Request): DemoWriteContext | undefined {
+  if (request.authenticatedUser?.kind !== 'demo') {
+    return undefined
+  }
+  if (request.authenticatedSessionId === undefined) {
+    throw new Error('Authenticated demo session ID is missing.')
+  }
+  return { sessionId: request.authenticatedSessionId }
+}
+
+function handleDemoActivityError(error: unknown, response: Response): boolean {
+  if (!(error instanceof DemoActivityError)) {
+    return false
+  }
+  if (error.code === 'session-expired') {
+    clearSessionCookie(response)
+    response.status(401).json({ error: 'Your demo session has expired.' })
+  } else {
+    response.status(429).json({
+      error:
+        'The demo activity limit has been reached. Delete an activity before adding another.',
+    })
+  }
+  return true
 }
 
 export function createApp(repository: ActivityRepository, options: AppOptions) {
@@ -127,9 +162,28 @@ export function createApp(repository: ActivityRepository, options: AppOptions) {
       options.authService,
       allowedOrigins,
       options.registrationEnabled,
+      options.demoStart,
     ),
   )
   app.use('/api/activities', requireAuthentication(options.authService))
+  app.use('/api/activities', (request, response, next) => {
+    const expectedDemo = request.get('x-twc-demo-session')
+    const token = readSessionToken(request)
+    if (
+      expectedDemo !== undefined &&
+      (request.authenticatedUser?.kind !== 'demo' ||
+        !token ||
+        demoSessionTag(token) !== expectedDemo)
+    ) {
+      response.setHeader('X-TWC-Demo-Session-Changed', 'true')
+      response.status(409).json({ error: 'Your demo session has ended.' })
+      return
+    }
+    if (request.authenticatedUser?.kind === 'demo' && token) {
+      response.setHeader('X-TWC-Demo-Session', demoSessionTag(token))
+    }
+    next()
+  })
 
   app.get('/api/activities', async (request, response) => {
     const accountId = getAuthenticatedAccountId(request, response)
@@ -227,9 +281,13 @@ export function createApp(repository: ActivityRepository, options: AppOptions) {
         const id = await repository.createActivity(
           accountId,
           parsedActivity.value,
+          getDemoWriteContext(request),
         )
         response.status(201).json({ id })
       } catch (error) {
+        if (handleDemoActivityError(error, response)) {
+          return
+        }
         console.error(
           'Unable to save activity:',
           error instanceof Error ? error.message : 'Unknown database error',
@@ -266,6 +324,7 @@ export function createApp(repository: ActivityRepository, options: AppOptions) {
           accountId,
           id,
           parsedActivity.value,
+          getDemoWriteContext(request),
         )
         if (!updated) {
           response.status(404).json({ error: 'Activity was not found.' })
@@ -274,6 +333,9 @@ export function createApp(repository: ActivityRepository, options: AppOptions) {
 
         response.json({ id })
       } catch (error) {
+        if (handleDemoActivityError(error, response)) {
+          return
+        }
         console.error(
           'Unable to update activity:',
           error instanceof Error ? error.message : 'Unknown database error',
@@ -300,13 +362,20 @@ export function createApp(repository: ActivityRepository, options: AppOptions) {
       }
 
       try {
-        const deleted = await repository.deleteActivity(accountId, id)
+        const deleted = await repository.deleteActivity(
+          accountId,
+          id,
+          getDemoWriteContext(request),
+        )
         if (!deleted) {
           response.status(404).json({ error: 'Activity was not found.' })
           return
         }
         response.json({ id })
       } catch (error) {
+        if (handleDemoActivityError(error, response)) {
+          return
+        }
         console.error(
           'Unable to delete activity:',
           error instanceof Error ? error.message : 'Unknown database error',

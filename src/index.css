@@ -133,6 +133,30 @@ a {
   font-size: 0.82rem;
 }
 
+.demo-banner {
+  padding: 0.75rem 1.5rem;
+  color: #543c04;
+  background: #fff3cc;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.demo-start {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #e1e6ee;
+}
+
+.demo-start h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.demo-start > p:not(.auth-error) {
+  color: #4b5870;
+  line-height: 1.5;
+}
+
 .auth-shell {
   position: relative;
   min-height: 100vh;
@@ -1409,6 +1433,7 @@ textarea:focus-visible {
 
   .site-header,
   .site-footer,
+  .demo-banner,
   .header-account,
   .print-preview-intro,
   .print-controls,

@@ -64,6 +64,7 @@ class MemoryAuthRepository implements AuthRepository {
       username,
       pendingEmail: null,
       passwordHash,
+      kind: 'regular',
       emailVerifiedAt: null,
       disabledAt: null,
     })
@@ -403,6 +404,7 @@ class MemoryAuthRepository implements AuthRepository {
       sessionId: session.sessionId,
       id: account.id,
       username: account.username,
+      kind: account.kind,
     }
   }
 
@@ -451,6 +453,54 @@ class MemoryMailer implements AuthMailer {
 }
 
 describe('authentication service', () => {
+  it('rejects demo password login and account management without sending recovery emails', async () => {
+    const repository = new MemoryAuthRepository()
+    const mailer = new MemoryMailer()
+    const service = new AuthenticationService(repository, mailer)
+    await service.register('demo@example.com', 'SecurePassword123')
+    const account = await repository.findAccountByUsername('demo@example.com')
+    assert.ok(account)
+    account.kind = 'demo'
+    account.emailVerifiedAt = new Date().toISOString()
+    account.pendingEmail = 'pending@example.com'
+    mailer.verificationEmails.length = 0
+
+    await assert.rejects(
+      service.login(account.username, 'SecurePassword123', null),
+      (error: unknown) =>
+        error instanceof AuthError && error.code === 'invalid-credentials',
+    )
+    await service.requestPasswordReset(account.username)
+    account.emailVerifiedAt = null
+    await service.resendVerification(account.username)
+    assert.equal(mailer.resetEmails.length, 0)
+    assert.equal(mailer.verificationEmails.length, 0)
+    for (const operation of [
+      () => service.getAccountDetails(account.id),
+      () =>
+        service.changePassword(
+          account.id,
+          'SecurePassword123',
+          'NewPassword123',
+          'A'.repeat(43),
+        ),
+      () => service.deactivateAccount(account.id, 'SecurePassword123'),
+      () =>
+        service.requestEmailChange(
+          account.id,
+          'SecurePassword123',
+          'new@example.com',
+        ),
+      () => service.resendEmailChange(account.id),
+      () => service.cancelEmailChange(account.id),
+    ]) {
+      await assert.rejects(
+        operation(),
+        (error: unknown) =>
+          error instanceof AuthError && error.code === 'demo-restricted',
+      )
+    }
+  })
   it('creates an unverified account and consumes its verification token once', async () => {
     const repository = new MemoryAuthRepository()
     const mailer = new MemoryMailer()

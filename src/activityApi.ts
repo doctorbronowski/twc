@@ -11,16 +11,59 @@ export interface ActivityListResponse {
   totalPages: number
 }
 
+let demoIdentity: { id: number; tag: string } | null = null
+
+export function setActivityDemoAccount(
+  identity: { id: number; tag: string } | null,
+): void {
+  demoIdentity = identity
+}
+
 export async function fetchActivityApi(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  const expectedDemo = demoIdentity
+  const startedAt = Date.now()
+  const headers = new Headers(init?.headers)
+  if (expectedDemo !== null) {
+    headers.set('X-TWC-Demo-Session', expectedDemo.tag)
+  }
   const response = await fetch(input, {
     ...init,
+    headers,
     credentials: init?.credentials ?? 'same-origin',
   })
-  if (response.status === 401) {
+  if (
+    response.status === 401 ||
+    response.headers.get('X-TWC-Demo-Session-Changed') === 'true'
+  ) {
     window.dispatchEvent(new Event('twc:session-expired'))
+  } else if (
+    expectedDemo !== null &&
+    response.headers.get('X-TWC-Demo-Session') === expectedDemo.tag
+  ) {
+    const rawRemaining = response.headers.get('X-TWC-Demo-Remaining-Ms')
+    const remainingMs = rawRemaining === null ? NaN : Number(rawRemaining)
+    if (
+      Number.isInteger(remainingMs) &&
+      remainingMs >= 0 &&
+      remainingMs <= 300_000
+    ) {
+      window.dispatchEvent(
+        new CustomEvent('twc:demo-activity', {
+          detail: {
+            type: 'activity',
+            id: expectedDemo.id,
+            tag: expectedDemo.tag,
+            startedAt,
+            remainingMs,
+          },
+        }),
+      )
+    } else {
+      console.error('The demo session deadline was missing or invalid.')
+    }
   }
   return response
 }

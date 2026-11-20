@@ -1,6 +1,7 @@
 import type { ResultSetHeader, RowDataPacket } from 'mysql2'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import type {
+  AccountKind,
   AuthAccount,
   AuthenticatedSession,
   AuthRepository,
@@ -14,6 +15,7 @@ interface AccountRow extends RowDataPacket {
   username: string
   pending_email: string | null
   password_hash: string
+  kind: AccountKind
   email_verified_at: string | null
   disabled_at: string | null
 }
@@ -60,7 +62,7 @@ export class MySqlAuthRepository implements AuthRepository {
 
   async findAccountByUsername(username: string): Promise<AuthAccount | null> {
     const [rows] = await this.pool.execute<AccountRow[]>(
-      `SELECT id, username, pending_email, password_hash, email_verified_at,
+      `SELECT id, username, pending_email, password_hash, kind, email_verified_at,
           disabled_at
         FROM \`account\`
         WHERE username = ?
@@ -74,6 +76,7 @@ export class MySqlAuthRepository implements AuthRepository {
           username: row.username,
           pendingEmail: row.pending_email,
           passwordHash: row.password_hash,
+          kind: row.kind,
           emailVerifiedAt: row.email_verified_at,
           disabledAt: row.disabled_at,
         }
@@ -82,7 +85,7 @@ export class MySqlAuthRepository implements AuthRepository {
 
   async findAccountById(id: number): Promise<AuthAccount | null> {
     const [rows] = await this.pool.execute<AccountRow[]>(
-      `SELECT id, username, pending_email, password_hash, email_verified_at,
+      `SELECT id, username, pending_email, password_hash, kind, email_verified_at,
           disabled_at
         FROM \`account\`
         WHERE id = ?
@@ -96,6 +99,7 @@ export class MySqlAuthRepository implements AuthRepository {
           username: row.username,
           pendingEmail: row.pending_email,
           passwordHash: row.password_hash,
+          kind: row.kind,
           emailVerifiedAt: row.email_verified_at,
           disabledAt: row.disabled_at,
         }
@@ -160,10 +164,11 @@ export class MySqlAuthRepository implements AuthRepository {
     try {
       await connection.beginTransaction()
       const [rows] = await connection.execute<TokenRow[]>(
-        `SELECT id, account_id
-          FROM account_email_verification_tokens
-          WHERE token_hash = ? AND consumed_at IS NULL
-            AND expires_at > CURRENT_TIMESTAMP(3)
+        `SELECT t.id, t.account_id
+          FROM account_email_verification_tokens AS t
+          INNER JOIN \`account\` AS a ON a.id = t.account_id
+          WHERE t.token_hash = ? AND t.consumed_at IS NULL
+            AND t.expires_at > CURRENT_TIMESTAMP(3) AND a.kind = 'regular'
           LIMIT 1
           FOR UPDATE`,
         [tokenHash],
@@ -245,7 +250,7 @@ export class MySqlAuthRepository implements AuthRepository {
           INNER JOIN \`account\` AS a ON a.id = t.account_id
           WHERE t.token_hash = ? AND t.consumed_at IS NULL
             AND t.expires_at > CURRENT_TIMESTAMP(3)
-            AND a.disabled_at IS NULL
+            AND a.disabled_at IS NULL AND a.kind = 'regular'
           LIMIT 1
           FOR UPDATE`,
         [tokenHash],
@@ -293,7 +298,8 @@ export class MySqlAuthRepository implements AuthRepository {
       const [result] = await connection.execute<ResultSetHeader>(
         `UPDATE \`account\`
           SET password_hash = ?, updated_at = CURRENT_TIMESTAMP(3)
-          WHERE id = ? AND password_hash = ? AND disabled_at IS NULL`,
+          WHERE id = ? AND password_hash = ? AND disabled_at IS NULL
+            AND kind = 'regular'`,
         [passwordHash, accountId, currentPasswordHash],
       )
       if (result.affectedRows !== 1) {
@@ -327,9 +333,10 @@ export class MySqlAuthRepository implements AuthRepository {
         (RowDataPacket & {
           password_hash: string
           disabled_at: string | null
+          kind: AccountKind
         })[]
       >(
-        `SELECT password_hash, disabled_at
+        `SELECT password_hash, disabled_at, kind
           FROM \`account\`
           WHERE id = ?
           LIMIT 1
@@ -338,7 +345,7 @@ export class MySqlAuthRepository implements AuthRepository {
       )
       const account = accounts[0]
       if (
-        !account ||
+        account?.kind !== 'regular' ||
         account.disabled_at !== null ||
         account.password_hash !== currentPasswordHash
       ) {
@@ -417,9 +424,10 @@ export class MySqlAuthRepository implements AuthRepository {
           username: string
           password_hash: string
           disabled_at: string | null
+          kind: AccountKind
         })[]
       >(
-        `SELECT username, password_hash, disabled_at
+        `SELECT username, password_hash, disabled_at, kind
           FROM \`account\`
           WHERE id = ?
           LIMIT 1
@@ -428,7 +436,7 @@ export class MySqlAuthRepository implements AuthRepository {
       )
       const account = accounts[0]
       if (
-        !account ||
+        account?.kind !== 'regular' ||
         account.disabled_at !== null ||
         account.password_hash !== currentPasswordHash
       ) {
@@ -489,9 +497,10 @@ export class MySqlAuthRepository implements AuthRepository {
         (RowDataPacket & {
           pending_email: string | null
           disabled_at: string | null
+          kind: AccountKind
         })[]
       >(
-        `SELECT pending_email, disabled_at
+        `SELECT pending_email, disabled_at, kind
           FROM \`account\`
           WHERE id = ?
           LIMIT 1
@@ -499,7 +508,7 @@ export class MySqlAuthRepository implements AuthRepository {
         [accountId],
       )
       if (
-        !accounts[0] ||
+        accounts[0]?.kind !== 'regular' ||
         accounts[0].disabled_at !== null ||
         accounts[0].pending_email !== pendingEmail
       ) {
@@ -531,11 +540,13 @@ export class MySqlAuthRepository implements AuthRepository {
       await connection.execute(
         `UPDATE \`account\`
           SET pending_email = NULL, updated_at = CURRENT_TIMESTAMP(3)
-          WHERE id = ?`,
+          WHERE id = ? AND kind = 'regular'`,
         [accountId],
       )
       await connection.execute(
-        'DELETE FROM account_email_change_tokens WHERE account_id = ?',
+        `DELETE t FROM account_email_change_tokens AS t
+          INNER JOIN \`account\` AS a ON a.id = t.account_id
+          WHERE t.account_id = ? AND a.kind = 'regular'`,
         [accountId],
       )
       await connection.commit()
@@ -562,7 +573,7 @@ export class MySqlAuthRepository implements AuthRepository {
           INNER JOIN \`account\` AS a ON a.id = t.account_id
           WHERE t.token_hash = ? AND t.consumed_at IS NULL
             AND t.expires_at > CURRENT_TIMESTAMP(3)
-            AND a.disabled_at IS NULL
+            AND a.disabled_at IS NULL AND a.kind = 'regular'
           LIMIT 1
           FOR UPDATE`,
         [tokenHash],
@@ -688,7 +699,7 @@ export class MySqlAuthRepository implements AuthRepository {
     try {
       await connection.beginTransaction()
       const [accounts] = await connection.execute<AccountRow[]>(
-        `SELECT id, username, pending_email, password_hash, email_verified_at,
+        `SELECT id, username, pending_email, password_hash, kind, email_verified_at,
             disabled_at
           FROM \`account\`
           WHERE id = ?
@@ -697,7 +708,8 @@ export class MySqlAuthRepository implements AuthRepository {
       )
       const account = accounts[0]
       if (
-        !account ||
+        account?.kind !== 'regular' ||
+        expectedAccount.kind !== 'regular' ||
         account.disabled_at !== null ||
         account.email_verified_at === null ||
         account.username !== expectedAccount.username ||
@@ -722,6 +734,27 @@ export class MySqlAuthRepository implements AuthRepository {
         [account.id],
       )
       if (existingSessionTokenHash) {
+        const [demoAccounts] = await connection.execute<
+          (RowDataPacket & { id: number })[]
+        >(
+          `SELECT a.id FROM \`account\` AS a
+            INNER JOIN sessions AS s ON s.account_id = a.id
+            WHERE s.token_hash = ? AND a.kind = 'demo'`,
+          [existingSessionTokenHash],
+        )
+        if (demoAccounts[0]) {
+          await connection.execute(
+            'SELECT id FROM `account` WHERE id = ? FOR UPDATE',
+            [demoAccounts[0].id],
+          )
+          await connection.execute(
+            `UPDATE demo_instances AS d
+              INNER JOIN sessions AS s ON s.account_id = d.account_id
+              SET d.ended_at = CURRENT_TIMESTAMP(3)
+              WHERE d.account_id = ? AND s.token_hash = ? AND d.ended_at IS NULL`,
+            [demoAccounts[0].id, existingSessionTokenHash],
+          )
+        }
         await connection.execute('DELETE FROM sessions WHERE token_hash = ?', [
           existingSessionTokenHash,
         ])
@@ -757,7 +790,7 @@ export class MySqlAuthRepository implements AuthRepository {
         return null
       }
       const [accounts] = await connection.execute<AccountRow[]>(
-        `SELECT id, username, pending_email, password_hash, email_verified_at,
+        `SELECT id, username, pending_email, password_hash, kind, email_verified_at,
             disabled_at
           FROM \`account\`
           WHERE id = ? AND disabled_at IS NULL
@@ -776,18 +809,54 @@ export class MySqlAuthRepository implements AuthRepository {
         return null
       }
 
-      await connection.execute(
-        `UPDATE sessions
-          SET last_activity_at = CURRENT_TIMESTAMP(3),
-              expires_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 15 MINUTE)
-          WHERE id = ?`,
-        [session.id],
-      )
+      const [result] =
+        account.kind === 'demo'
+          ? await connection.execute<ResultSetHeader>(
+              `UPDATE sessions AS s
+              INNER JOIN demo_instances AS d ON d.account_id = s.account_id
+              SET s.last_activity_at = CURRENT_TIMESTAMP(3),
+                  s.expires_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 5 MINUTE),
+                  d.expires_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 5 MINUTE)
+              WHERE s.id = ? AND s.expires_at > CURRENT_TIMESTAMP(3)
+                AND d.ended_at IS NULL AND d.expires_at > CURRENT_TIMESTAMP(3)`,
+              [session.id],
+            )
+          : await connection.execute<ResultSetHeader>(
+              `UPDATE sessions
+              SET last_activity_at = CURRENT_TIMESTAMP(3),
+                  expires_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL 15 MINUTE)
+              WHERE id = ? AND expires_at > CURRENT_TIMESTAMP(3)`,
+              [session.id],
+            )
+      if (result.affectedRows === 0) {
+        await connection.commit()
+        return null
+      }
+      let demoRemainingMs: number | undefined
+      if (account.kind === 'demo') {
+        const [deadlines] = await connection.execute<
+          (RowDataPacket & { remaining_ms: number | string })[]
+        >(
+          `SELECT GREATEST(0, FLOOR(TIMESTAMPDIFF(MICROSECOND, CURRENT_TIMESTAMP(3),
+            expires_at) / 1000)) AS remaining_ms FROM sessions WHERE id = ?`,
+          [session.id],
+        )
+        demoRemainingMs = Number(deadlines[0]?.remaining_ms)
+        if (
+          !Number.isInteger(demoRemainingMs) ||
+          demoRemainingMs < 0 ||
+          demoRemainingMs > 300_000
+        ) {
+          throw new Error('Unable to determine the demo session deadline.')
+        }
+      }
       await connection.commit()
       return {
         sessionId: session.id,
         id: account.id,
-        username: account.username,
+        username: account.kind === 'demo' ? 'Demo' : account.username,
+        kind: account.kind,
+        ...(demoRemainingMs === undefined ? {} : { demoRemainingMs }),
       }
     } catch (error) {
       await connection.rollback()
@@ -798,8 +867,38 @@ export class MySqlAuthRepository implements AuthRepository {
   }
 
   async revokeSession(tokenHash: Buffer): Promise<void> {
-    await this.pool.execute('DELETE FROM sessions WHERE token_hash = ?', [
-      tokenHash,
-    ])
+    const connection = await this.pool.getConnection()
+    try {
+      await connection.beginTransaction()
+      const [sessions] = await connection.execute<
+        (RowDataPacket & { account_id: number })[]
+      >('SELECT account_id FROM sessions WHERE token_hash = ? LIMIT 1', [
+        tokenHash,
+      ])
+      if (sessions[0]) {
+        const [accounts] = await connection.execute<
+          (RowDataPacket & { kind: AccountKind })[]
+        >('SELECT kind FROM `account` WHERE id = ? FOR UPDATE', [
+          sessions[0].account_id,
+        ])
+        if (accounts[0]?.kind === 'demo') {
+          await connection.execute(
+            `UPDATE demo_instances SET ended_at = CURRENT_TIMESTAMP(3)
+              WHERE account_id = ? AND ended_at IS NULL`,
+            [sessions[0].account_id],
+          )
+        }
+        await connection.execute(
+          'DELETE FROM sessions WHERE account_id = ? AND token_hash = ?',
+          [sessions[0].account_id, tokenHash],
+        )
+      }
+      await connection.commit()
+    } catch (error) {
+      await connection.rollback()
+      throw error
+    } finally {
+      connection.release()
+    }
   }
 }

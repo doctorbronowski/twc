@@ -51,6 +51,12 @@ interface AccountDisabledColumnRow extends RowDataPacket {
   IS_NULLABLE: 'YES' | 'NO'
 }
 
+interface AccountKindColumnRow extends RowDataPacket {
+  COLUMN_TYPE: string
+  IS_NULLABLE: 'YES' | 'NO'
+  COLUMN_DEFAULT: string | null
+}
+
 async function renameActivityColumn(previousName: string, newName: string) {
   const [columns] = await connection.execute<ColumnNameRow[]>(
     `SELECT COLUMN_NAME
@@ -191,6 +197,29 @@ async function ensureAccountDisabledAtColumn() {
   }
 }
 
+async function ensureAccountKindColumn() {
+  const [columns] = await connection.execute<AccountKindColumnRow[]>(
+    `SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+      FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    ['twc', 'account', 'kind'],
+  )
+
+  if (columns.length === 0) {
+    await connection.query(
+      "ALTER TABLE `account` ADD COLUMN kind ENUM('regular', 'demo') NOT NULL DEFAULT 'regular' AFTER password_hash",
+    )
+  } else if (
+    columns[0].COLUMN_TYPE.toLowerCase() !== "enum('regular','demo')" ||
+    columns[0].IS_NULLABLE !== 'NO' ||
+    !['regular', "'regular'"].includes(columns[0].COLUMN_DEFAULT ?? '')
+  ) {
+    throw new Error(
+      "account.kind must be ENUM('regular', 'demo') NOT NULL DEFAULT 'regular'; resolve the existing column before continuing.",
+    )
+  }
+}
+
 try {
   await connection.query(
     'CREATE DATABASE IF NOT EXISTS `twc` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
@@ -207,6 +236,7 @@ try {
   await ensurePendingEmailColumn()
   await ensurePendingEmailIndex()
   await ensureAccountDisabledAtColumn()
+  await ensureAccountKindColumn()
   await ensureActivityAccountIdColumn()
   await ensureActivityAccountIdIndex()
   await connection.query(
@@ -229,6 +259,15 @@ try {
   )
   await connection.query(
     "GRANT SELECT, INSERT, UPDATE, DELETE ON `twc`.`sessions` TO 'twc_app'@'127.0.0.1'",
+  )
+  await connection.query(
+    "GRANT SELECT, INSERT, UPDATE ON `twc`.`demo_instances` TO 'twc_app'@'127.0.0.1'",
+  )
+  await connection.query(
+    "GRANT SELECT, INSERT, DELETE ON `twc`.`demo_start_attempts` TO 'twc_app'@'127.0.0.1'",
+  )
+  await connection.query(
+    "GRANT SELECT, INSERT ON `twc`.`demo_start_requests` TO 'twc_app'@'127.0.0.1'",
   )
 
   console.log(

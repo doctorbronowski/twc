@@ -8,10 +8,13 @@ import {
 import { isValidPassword } from '../passwordValidation.ts'
 import PasswordInput from './PasswordInput.tsx'
 
-export interface AuthUser {
+export type AuthUser = {
   id: number
   username: string
-}
+} & (
+  | { kind: 'regular' }
+  | { kind: 'demo'; demoSession: string; demoRemainingMs: number }
+)
 
 function AuthPageHeader() {
   return (
@@ -43,7 +46,15 @@ function isAuthUser(value: unknown): value is AuthUser {
     typeof value.id === 'number' &&
     Number.isSafeInteger(value.id) &&
     value.id > 0 &&
-    typeof value.username === 'string'
+    typeof value.username === 'string' &&
+    (value.kind === 'regular' ||
+      (value.kind === 'demo' &&
+        typeof value.demoSession === 'string' &&
+        /^[0-9a-f]{64}$/.test(value.demoSession) &&
+        typeof value.demoRemainingMs === 'number' &&
+        Number.isInteger(value.demoRemainingMs) &&
+        value.demoRemainingMs >= 0 &&
+        value.demoRemainingMs <= 300_000))
   )
 }
 
@@ -441,12 +452,85 @@ export function LoginPage({ onLogin, overlay = false }: LoginPageProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [dialogKind, setDialogKind] = useState<AuthDialogKind | null>(null)
+  const [demoAvailable, setDemoAvailable] = useState(false)
+  const [startingDemo, setStartingDemo] = useState(false)
+  const [demoError, setDemoError] = useState<string | null>(null)
+  const demoKey = useRef<string | null>(null)
+  const demoEnded =
+    !overlay && new URLSearchParams(window.location.search).get('demo')
 
   useEffect(() => {
     if (overlay) {
       emailInputRef.current?.focus()
     }
   }, [overlay])
+
+  useEffect(() => {
+    if (overlay) return
+    const controller = new AbortController()
+    void fetch('/api/auth/capabilities', { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Unable to load demo availability.')
+        const body: unknown = await response.json()
+        if (!isRecord(body) || typeof body.demo !== 'boolean') {
+          throw new Error('Invalid demo availability response.')
+        }
+        setDemoAvailable(body.demo)
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error('Unable to check demo availability:', error)
+        }
+      })
+    return () => controller.abort()
+  }, [overlay])
+
+  async function handleDemoStart() {
+    if (startingDemo || isSubmitting) return
+    setStartingDemo(true)
+    setDemoError(null)
+    try {
+      if (!demoKey.current) {
+        const bytes = crypto.getRandomValues(new Uint8Array(32))
+        demoKey.current = btoa(String.fromCharCode(...bytes))
+          .replaceAll('+', '-')
+          .replaceAll('/', '_')
+          .replace(/=+$/, '')
+      }
+      const response = await fetch('/api/auth/demo', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Idempotency-Key': demoKey.current },
+      })
+      if (!response.ok) {
+        setDemoError(
+          await responseMessage(
+            response,
+            'Demo mode is unavailable. Please try again later.',
+          ),
+        )
+        return
+      }
+      const body: unknown = await response.json()
+      if (
+        !isRecord(body) ||
+        !isAuthUser(body.user) ||
+        body.user.kind !== 'demo'
+      ) {
+        setDemoError(
+          'The demo response was invalid. Refresh the page to check your session.',
+        )
+        return
+      }
+      onLogin(body.user)
+    } catch {
+      setDemoError(
+        'Could not start the demo. Check your connection and try again.',
+      )
+    } finally {
+      setStartingDemo(false)
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -532,7 +616,7 @@ export function LoginPage({ onLogin, overlay = false }: LoginPageProps) {
           <button
             className="button button-primary auth-submit"
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || startingDemo}
           >
             {isSubmitting ? 'Signing in…' : 'Sign in'}
           </button>
@@ -553,6 +637,36 @@ export function LoginPage({ onLogin, overlay = false }: LoginPageProps) {
             Forgot password?
           </button>
         </div>
+        {demoEnded && (
+          <p className="auth-success" role="status">
+            {demoEnded === 'ended'
+              ? 'Your demo has ended.'
+              : 'Your demo session has expired.'}{' '}
+            Its temporary data is no longer available and will be cleaned up.
+          </p>
+        )}
+        {demoAvailable && !overlay && (
+          <section className="demo-start" aria-labelledby="demo-start-title">
+            <h2 id="demo-start-title">Try a demo</h2>
+            <p>
+              Explore with temporary sample data. The demo ends after five
+              minutes of inactivity. Do not enter sensitive information.
+            </p>
+            {demoError && (
+              <p className="auth-error" role="alert">
+                {demoError}
+              </p>
+            )}
+            <button
+              className="button button-secondary auth-submit"
+              type="button"
+              disabled={startingDemo || isSubmitting}
+              onClick={() => void handleDemoStart()}
+            >
+              {startingDemo ? 'Starting demo…' : 'Try Demo'}
+            </button>
+          </section>
+        )}
       </section>
       {dialogKind === 'register' && (
         <CreateAccountDialog onClose={() => setDialogKind(null)} />

@@ -33,6 +33,7 @@ export const accountSchemaStatements = [
     username VARCHAR(254) NOT NULL,
     pending_email VARCHAR(254) NULL,
     password_hash VARCHAR(255) NOT NULL,
+    kind ENUM('regular', 'demo') NOT NULL DEFAULT 'regular',
     email_verified_at DATETIME(3) NULL,
     disabled_at DATETIME(3) NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -96,6 +97,34 @@ export const accountSchemaStatements = [
     KEY idx_sessions_account (account_id),
     KEY idx_sessions_expiry (expires_at),
     CONSTRAINT fk_sessions_account
+      FOREIGN KEY (account_id) REFERENCES \`account\` (id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+  `CREATE TABLE IF NOT EXISTS demo_instances (
+    account_id INT UNSIGNED NOT NULL,
+    expires_at DATETIME(3) NOT NULL,
+    ended_at DATETIME(3) NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (account_id),
+    KEY idx_demo_instances_expiry (expires_at),
+    KEY idx_demo_instances_ended (ended_at),
+    CONSTRAINT fk_demo_instances_account
+      FOREIGN KEY (account_id) REFERENCES \`account\` (id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+  `CREATE TABLE IF NOT EXISTS demo_start_attempts (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    ip_hash BINARY(32) NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_demo_start_attempts_ip_time (ip_hash, created_at),
+    KEY idx_demo_start_attempts_time (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+  `CREATE TABLE IF NOT EXISTS demo_start_requests (
+    request_hash BINARY(32) NOT NULL,
+    account_id INT UNSIGNED NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (request_hash),
+    UNIQUE KEY uq_demo_start_requests_account (account_id),
+    CONSTRAINT fk_demo_start_requests_account
       FOREIGN KEY (account_id) REFERENCES \`account\` (id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 ] as const

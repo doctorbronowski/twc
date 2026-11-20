@@ -4,6 +4,16 @@ import type { SearchActivity } from './components/ActivityDetailsDialog.tsx'
 const selectionStorageKey = 'twc.export.selection'
 const previewStorageKey = 'twc.export.preview'
 
+export function clearExportStorage(): boolean {
+  try {
+    window.sessionStorage.removeItem(selectionStorageKey)
+    window.sessionStorage.removeItem(previewStorageKey)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export interface ExportSelectionItem {
   id: number
   activity_date: string | null

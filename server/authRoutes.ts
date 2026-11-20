@@ -5,6 +5,8 @@ import {
   AuthError,
   type AuthenticationService,
   clearSessionCookie,
+  demoSessionDurationSeconds,
+  demoSessionTag,
   hasTrustedOrigin,
   loadTrustedOrigins,
   readSessionToken,
@@ -12,6 +14,8 @@ import {
   setSessionCookie,
 } from './auth.ts'
 import { AuthRateLimiter } from './authRateLimiter.ts'
+import { DemoCreationError, hashDemoStartKey } from './demoCreation.ts'
+import type { DemoStartDependencies } from './demoStart.ts'
 
 const quarterHour = 15 * 60 * 1000
 const hour = 60 * 60 * 1000
@@ -86,12 +90,22 @@ export function createAuthRouter(
   service: AuthenticationService,
   allowedOrigins: ReadonlySet<string> = loadTrustedOrigins(),
   registrationEnabled = false,
+  demoStart?: DemoStartDependencies,
 ) {
   const router = express.Router()
   const limiter = new AuthRateLimiter()
   const requireTrustedOrigin: RequestHandler = (request, response, next) => {
     if (!hasTrustedOrigin(request, allowedOrigins)) {
       response.status(403).json({ error: 'Request origin is not allowed.' })
+      return
+    }
+    next()
+  }
+  const requireRegularAccount: RequestHandler = (request, response, next) => {
+    if (request.authenticatedUser?.kind !== 'regular') {
+      response.status(403).json({
+        error: 'Account management is unavailable in demo mode.',
+      })
       return
     }
     next()
@@ -109,6 +123,78 @@ export function createAuthRouter(
     }
     next()
   }
+
+  router.get('/capabilities', (_request, response) => {
+    response.json({ demo: demoStart !== undefined })
+  })
+
+  router.post('/demo', requireTrustedOrigin, async (request, response) => {
+    if (!demoStart) {
+      response.status(503).json({ error: 'Demo mode is not available.' })
+      return
+    }
+    const key = request.get('idempotency-key')
+    if (!key || !hashDemoStartKey(key)) {
+      response
+        .status(400)
+        .json({ error: 'A valid demo request key is required.' })
+      return
+    }
+    const ip = demoStart.clientIp(request)
+    if (!ip) {
+      console.error('Unable to determine a trusted client IP for demo start.')
+      response.status(503).json({ error: 'Demo mode is not available.' })
+      return
+    }
+    try {
+      const rate = await demoStart.consume(ip)
+      if (!rate.allowed) {
+        response.setHeader('Retry-After', rate.retryAfterSeconds)
+        response
+          .status(429)
+          .json({ error: 'Too many demo attempts. Please try again later.' })
+        return
+      }
+      const token = readSessionToken(request)
+      if (token && (await service.authenticate(token))) {
+        response.status(409).json({
+          error: 'Sign out before starting a demo.',
+        })
+        return
+      }
+      const result = await demoStart.createDemo(key)
+      setSessionCookie(response, result.sessionToken, result.user.kind)
+      response.status(201).json({
+        user: {
+          ...result.user,
+          demoSession: demoSessionTag(result.sessionToken),
+          demoRemainingMs: demoSessionDurationSeconds * 1000,
+        },
+      })
+    } catch (error) {
+      if (error instanceof DemoCreationError) {
+        if (error.code === 'duplicate-request') {
+          response
+            .status(409)
+            .json({ error: 'This demo request has already been used.' })
+          return
+        }
+        if (error.code === 'account-limit') {
+          response.status(429).json({
+            error:
+              'All demo spaces are currently in use. Please try again later.',
+          })
+          return
+        }
+        console.error(`Unable to start a demo: ${error.code}`)
+        response.status(503).json({
+          error: 'Demo mode is not available. Please try again later.',
+        })
+        return
+      }
+      writeUnexpectedError('start a demo', error, response)
+    }
+  })
 
   router.post(
     '/register',
@@ -185,7 +271,7 @@ export function createAuthRouter(
         body.password,
         readSessionToken(request),
       )
-      setSessionCookie(response, result.sessionToken)
+      setSessionCookie(response, result.sessionToken, result.user.kind)
       response.json({ user: result.user })
     } catch (error) {
       if (error instanceof AuthError && error.code === 'invalid-credentials') {
@@ -202,8 +288,22 @@ export function createAuthRouter(
 
   router.post('/logout', requireTrustedOrigin, async (request, response) => {
     try {
-      await service.logout(readSessionToken(request))
-      clearSessionCookie(response)
+      const token = readSessionToken(request)
+      const expectedDemo = request.get('x-twc-demo-session')
+      if (expectedDemo && token) {
+        const session = await service.authenticate(token)
+        if (
+          session &&
+          (session.kind !== 'demo' || demoSessionTag(token) !== expectedDemo)
+        ) {
+          response.status(409).json({ error: 'Your demo session has ended.' })
+          return
+        }
+      }
+      await service.logout(token)
+      if (!expectedDemo) {
+        clearSessionCookie(response)
+      }
       response.status(204).end()
     } catch (error) {
       writeUnexpectedError('sign out', error, response)
@@ -224,10 +324,29 @@ export function createAuthRouter(
         response.json({ authenticated: false })
         return
       }
-      setSessionCookie(response, token)
+      if (
+        session.kind === 'demo' &&
+        (session.demoRemainingMs === undefined ||
+          !Number.isInteger(session.demoRemainingMs) ||
+          session.demoRemainingMs < 0 ||
+          session.demoRemainingMs > demoSessionDurationSeconds * 1000)
+      ) {
+        throw new Error('Demo session deadline is unavailable.')
+      }
+      setSessionCookie(response, token, session.kind)
       response.json({
         authenticated: true,
-        user: { id: session.id, username: session.username },
+        user: {
+          id: session.id,
+          username: session.username,
+          kind: session.kind,
+          ...(session.kind === 'demo'
+            ? {
+                demoSession: demoSessionTag(token),
+                demoRemainingMs: session.demoRemainingMs,
+              }
+            : {}),
+        },
       })
     } catch (error) {
       writeUnexpectedError('read the session', error, response)
@@ -237,6 +356,7 @@ export function createAuthRouter(
   router.get(
     '/account',
     requireAuthentication(service),
+    requireRegularAccount,
     async (request, response) => {
       const user = request.authenticatedUser
       if (!user) {
@@ -261,6 +381,7 @@ export function createAuthRouter(
     '/account/deactivate',
     requireTrustedOrigin,
     requireAuthentication(service),
+    requireRegularAccount,
     async (request, response) => {
       const user = request.authenticatedUser
       if (!user) {
@@ -320,6 +441,7 @@ export function createAuthRouter(
     '/email-change',
     requireTrustedOrigin,
     requireAuthentication(service),
+    requireRegularAccount,
     async (request, response) => {
       const user = request.authenticatedUser
       if (!user) {
@@ -380,6 +502,7 @@ export function createAuthRouter(
     '/email-change/resend',
     requireTrustedOrigin,
     requireAuthentication(service),
+    requireRegularAccount,
     async (request, response) => {
       const user = request.authenticatedUser
       if (!user) {
@@ -428,6 +551,7 @@ export function createAuthRouter(
     '/email-change/cancel',
     requireTrustedOrigin,
     requireAuthentication(service),
+    requireRegularAccount,
     async (request, response) => {
       const user = request.authenticatedUser
       if (!user) {
@@ -648,6 +772,7 @@ export function createAuthRouter(
     '/password',
     requireTrustedOrigin,
     requireAuthentication(service),
+    requireRegularAccount,
     async (request, response) => {
       const user = request.authenticatedUser
       const token = readSessionToken(request)

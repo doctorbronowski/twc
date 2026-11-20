@@ -1,7 +1,7 @@
 import { readExportPreview } from '../exportStorage.ts'
 import { getActivityDetails } from './ActivityDetailsDialog.tsx'
 
-function ActivityPrintPreviewPage() {
+function ActivityPrintPreviewPage({ demo = false }: { demo?: boolean }) {
   const activities = readExportPreview()
 
   if (!activities) {
@@ -50,6 +50,9 @@ function ActivityPrintPreviewPage() {
         destination, and save. Dialog wording may vary by browser.
       </p>
       <div className="print-activities">
+        {demo && (
+          <p className="print-demo-label">Demo — temporary sample data</p>
+        )}
         {activities.map((activity, index) => (
           <article
             className="print-activity"

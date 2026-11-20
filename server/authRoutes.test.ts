@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import { after, before, beforeEach, describe, it } from 'node:test'
 import type { ActivityRepository } from './activityRepository.ts'
 import { createApp } from './app.ts'
 import type { AuthAccount, AuthRepository } from './auth.ts'
-import { AuthenticationService } from './auth.ts'
+import { AuthenticationService, demoSessionTag } from './auth.ts'
 import { hashPassword } from './password.ts'
 
 describe('Authentication API', () => {
@@ -15,6 +16,7 @@ describe('Authentication API', () => {
     username: 'owner@example.com',
     pendingEmail: null,
     passwordHash: '',
+    kind: 'regular',
     emailVerifiedAt: new Date().toISOString(),
     disabledAt: null,
   }
@@ -115,6 +117,8 @@ describe('Authentication API', () => {
         sessionId: session.sessionId,
         id: account.id,
         username: account.username,
+        kind: account.kind,
+        ...(account.kind === 'demo' ? { demoRemainingMs: 300_000 } : {}),
       }
     },
     async revokeSession(tokenHash) {
@@ -173,6 +177,7 @@ describe('Authentication API', () => {
 
   beforeEach(() => {
     sessions.clear()
+    account.kind = 'regular'
   })
 
   it('rejects auth requests from untrusted or missing origins', async () => {
@@ -194,6 +199,79 @@ describe('Authentication API', () => {
     assert.equal(sessions.size, 0)
   })
 
+  it('reports demo availability without enabling a disabled demo', async () => {
+    const response = await fetch(`${baseUrl}/api/auth/capabilities`)
+    assert.deepEqual(await response.json(), { demo: false })
+    assert.match(response.headers.get('cache-control') ?? '', /no-store/)
+  })
+
+  it('reports enabled demo availability without exposing its configuration', async () => {
+    const app = createApp(activityRepository, {
+      authService: service,
+      allowedOrigins: new Set([allowedOrigin]),
+      demoStart: {
+        clientIp: () => null,
+        consume: async () => ({ allowed: true, retryAfterSeconds: 0 }),
+        createDemo: async () => {
+          throw new Error('Unexpected demo creation.')
+        },
+      },
+    })
+    const enabledServer = app.listen(0, '127.0.0.1')
+    await once(enabledServer, 'listening')
+    try {
+      const port = (enabledServer.address() as AddressInfo).port
+      const response = await fetch(
+        `http://127.0.0.1:${port}/api/auth/capabilities`,
+      )
+      assert.deepEqual(await response.json(), { demo: true })
+    } finally {
+      enabledServer.close()
+      await once(enabledServer, 'close')
+    }
+  })
+
+  it('does not let a stale demo tab sign out a regular session', async () => {
+    const token = 'A'.repeat(43)
+    sessions.set(createHash('sha256').update(token).digest('hex'), {
+      sessionId: 1,
+      accountId: account.id,
+      expiresAt: Date.now() + 300_000,
+    })
+    const response = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: 'POST',
+      headers: {
+        Cookie: `twc_session=${token}`,
+        Origin: allowedOrigin,
+        'X-TWC-Demo-Session': demoSessionTag(token),
+      },
+    })
+    assert.equal(response.status, 409)
+    assert.equal(response.headers.get('set-cookie'), null)
+    assert.equal(sessions.size, 1)
+  })
+
+  it('revokes an expected demo without clearing a potentially newer browser cookie', async () => {
+    account.kind = 'demo'
+    const token = 'A'.repeat(43)
+    sessions.set(createHash('sha256').update(token).digest('hex'), {
+      sessionId: 1,
+      accountId: account.id,
+      expiresAt: Date.now() + 300_000,
+    })
+    const response = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: 'POST',
+      headers: {
+        Cookie: `twc_session=${token}`,
+        Origin: allowedOrigin,
+        'X-TWC-Demo-Session': demoSessionTag(token),
+      },
+    })
+    assert.equal(response.status, 204)
+    assert.equal(response.headers.get('set-cookie'), null)
+    assert.equal(sessions.size, 0)
+  })
+
   it('sets a protected sliding session cookie and revokes it on logout', async () => {
     const login = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
@@ -209,7 +287,7 @@ describe('Authentication API', () => {
 
     assert.equal(login.status, 200)
     assert.deepEqual(await login.json(), {
-      user: { id: account.id, username: account.username },
+      user: { id: account.id, username: account.username, kind: 'regular' },
     })
     const setCookie = login.headers.get('set-cookie')
     assert.ok(setCookie)
@@ -224,7 +302,7 @@ describe('Authentication API', () => {
     })
     assert.deepEqual(await session.json(), {
       authenticated: true,
-      user: { id: account.id, username: account.username },
+      user: { id: account.id, username: account.username, kind: 'regular' },
     })
     assert.match(session.headers.get('set-cookie') ?? '', /Max-Age=900/)
 
@@ -235,6 +313,46 @@ describe('Authentication API', () => {
     assert.equal(logout.status, 204)
     assert.match(logout.headers.get('set-cookie') ?? '', /Max-Age=0/)
     assert.equal(sessions.size, 0)
+  })
+
+  it('uses a five-minute demo cookie and denies account-management endpoints', async () => {
+    account.kind = 'demo'
+    const token = 'A'.repeat(43)
+    sessions.set(createHash('sha256').update(token).digest('hex'), {
+      sessionId: 1,
+      accountId: account.id,
+      expiresAt: Date.now() + 300_000,
+    })
+    const headers = { Cookie: `twc_session=${token}`, Origin: allowedOrigin }
+    const session = await fetch(`${baseUrl}/api/auth/session`, { headers })
+    assert.deepEqual(await session.json(), {
+      authenticated: true,
+      user: {
+        id: account.id,
+        username: account.username,
+        kind: 'demo',
+        demoSession: demoSessionTag(token),
+        demoRemainingMs: 300_000,
+      },
+    })
+    assert.match(session.headers.get('set-cookie') ?? '', /Max-Age=300/)
+
+    for (const [method, path] of [
+      ['GET', '/account'],
+      ['POST', '/account/deactivate'],
+      ['POST', '/email-change'],
+      ['POST', '/email-change/resend'],
+      ['POST', '/email-change/cancel'],
+      ['POST', '/password'],
+    ]) {
+      const response = await fetch(`${baseUrl}/api/auth${path}`, {
+        method,
+        headers,
+      })
+      assert.equal(response.status, 403, path)
+      assert.match(response.headers.get('set-cookie') ?? '', /Max-Age=300/)
+    }
+    assert.equal(sessions.size, 1)
   })
 
   it('rejects a second sign-in and preserves the first session', async () => {
@@ -266,7 +384,7 @@ describe('Authentication API', () => {
     })
     assert.deepEqual(await session.json(), {
       authenticated: true,
-      user: { id: account.id, username: account.username },
+      user: { id: account.id, username: account.username, kind: 'regular' },
     })
   })
 
